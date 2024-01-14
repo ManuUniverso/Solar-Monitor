@@ -3,4 +3,3 @@ Monitoring the solar energy system is directly facilitated through port readings
 
 Attached diagram of connections
 ![Image](SolarMonitor0.1.1a.jpg)
-[SolarMonitor0.1.1a.jpg](https://i.ibb.co/d01kpLN/Solar-Monitor0-1-1a.jpg)https://i.ibb.co/d01kpLN/Solar-Monitor0-1-1a.jpg
