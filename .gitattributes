@@ -1,2 +1,3 @@
 *.ino linguist-language=C++
 *.h linguist-language=C++
+.gitattributes linguist-generated=true
