@@ -322,7 +322,7 @@ Version Date Author Comment
 #define BATDate "2021-03-22"                               /// Imagen Text SubMenu Bateria Fecha de fabricacion
 #define BATBrand "Pylontech"                               /// Imagen Text SubMenu Bateria Marca
 #define BATModel "UP2500NB01V00101"                        /// Imagen Text SubMenu Bateria Modelo
-#define BATSerialNumbr "PPTBP01101356127"                  /// Imagen Text SubMenu Bateria Numero de Serie
+#define BATSerialNumbr "PPTxxxxxxxxxx"                  /// Imagen Text SubMenu Bateria Numero de Serie
 #define BATCell "IFpP/13/141/238/[(3P3S)2S+3P2S]M/0+50/95" /// Imagen Text SubMenu Bateria Celda tipologia estructura
 
 String IVTCSStrg;                    /// Inverter String Estado
