@@ -7,7 +7,9 @@ There is still a bug and problem updating the image on the screen.
 There are still poster errors on the screen
 
 ![Image](SolarMonitorDisplay.jpg)
+
 Connection diagram attached
+
 ![Image](SolarMonitor012.jpg)
 
 
