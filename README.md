@@ -4,4 +4,4 @@ Monitoring the solar energy system is directly facilitated through port readings
 It has many bugs that I am still correcting but it can be used to do a first test and read the ve direct. No data is sent to the inverter or MPPT, it is only reading and monitoring.
 
 Attached diagram of connections.
-![Image](SolarMonito.jpg)
+![Image](SolarMonitor.jpg)
