@@ -6,3 +6,5 @@ There is still a bug and problem updating the image on the screen.
 
 Connection diagram attached
 ![Image](SolarMonitor.jpg)
+![Image](SolarMonitorDisplay.jpg)
+
