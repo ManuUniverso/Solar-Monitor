@@ -8,6 +8,6 @@ There are still poster errors on the screen
 
 Connection diagram attached
 ![Image](SolarMonitorDisplay.jpg)
-![Image](SolarMonitor.jpgg)
+![Image](SolarMonitor.jpg)
 
 
