@@ -4,6 +4,8 @@ Monitoring of the solar energy system is facilitated directly through the readin
 They are only reading the data, no configurations are sent or the settings of the Victron Energy devices are modified.
 There is still a bug and problem updating the image on the screen.
 
+It is better to power the current sensor with 5v for a more accurate calibration and better reading of values but you will need a logic level adapter as well.
+
 There are still poster errors on the screen
 
 ![Image](SolarMonitorDisplay.jpg)
