@@ -1,14 +1,10 @@
-/* Solar Monitor v0.1.2 ManuUniverso 2024
+/* Solar Monitor v1.0.0 ManuUniverso 2024
 
-It is the first version of the program, complete or practically complete.
-This version is still unstable and may have bugs or incomplete functionality.
-
-Using an ESP32, the data is read from the VE.Direct ports (Victron Energy brand) of the Inverter and MPPT.
-Then display the results on a color ili9341 screen.
-Taking advantage of the available touchscreen you can enter the submenu of each device.
-
-Much of the comments are in Spanish, you can translate but, the symbolic name of 
-variables is often quite intuitive and easy to associate.
+First stable version. Still some bug in the show display.
+An ESP32 is used, data is read from the VE.Direct (Victron Energy brand) ports of the Inverter and MPPT. Then display the results on a color screen ili9341.
+The touch screen available will allow you to enter the submenu of each device.
+LDR dimming mode add.
+The comments are now mostly in English and some have yet to change.
 
 ========================================================================================================
 ======================= OPEN SOURCE LICENSE ============================================================
@@ -30,9 +26,10 @@ OR THE USE OR OTHER DEALINGS OF THE SOFTWARE.
 Release history
 ............................................................................................................
 Version Date Author Comment
-0.1.0 01/01/24 First tested OK
-0.1.1 14/01/24 Added touch function with submenu
-0.1.2 23/01/24 small bug & Current Sensor HCS LSP 20A for Charger (without ve direct)
+0.1.0 01/01/2024 First tested OK
+0.1.1 14/01/2024 Added touch function with submenu
+0.1.2 23/01/2024 small bug & Current Sensor HCS LSP 20A for Charger (without ve direct)
+1.0.0 30/01/2024 great changes and improvements, first stable version, add dimming mode LDR
 
    *****************************************************************************
    The reading of the port was achieved thanks to the fantastic contribution of Âld Skânser:
@@ -58,9 +55,11 @@ Version Date Author Comment
 
    The libraries as well as diagrams should be provided with this code for their correct use.
    -"ResetAnim.h""MenuHome.h""MenuSolar.h""MenuCharger.h" "MenuInverter.h""MenuBat.h""MenuLoad.h"
-   - SolarMonitor0.1.1a.jpg diagrams & pin connection
+   - SolarMonitor.jpg diagrams & pin connection
      .ESP32 Pin image from https://www.LastMinuteEngineers.com
      .ili9341 image from https://bidouilleur.ca/
+     .Current Sensor
+     -LDR Dimming mode
 
    The board Available direcetly from the Arduino IDE v2 
    - arduino-esp32    "Select USB correct"  & "node32s"
@@ -72,7 +71,8 @@ Version Date Author Comment
    -Fonts/FreeSansBold18pt7b.h No need to download, it is included in the previous ones.
    Pin & Config:
    -Current Sensor Model ZY264-20A HCS LSP 20A voltage supply will affect the reading value 
-   -Current Sensor Compatible with 5v but used with 3.3 it is capable of measuring current in both directions.
+   -Current Sensor Compatible with 5v but used with 3.3 it is capable of measuring current in both directions. 
+   -Current Sensor loses measurement dynamics with 3.3v, To use 5v you need a logic level adapter to 3.3v
    -Current Sensor 3.3v will affect the reading value  you must calibrate the two values CurrSensRAW
    -Current Sensor GND ( from ESP32 )
    -Current Sensor OUT ---> GPIO33
@@ -86,8 +86,12 @@ Version Date Author Comment
    -ESP32 Pin 4   --- TFT_RST   image
    -ESP32 Pin 19  --- TFT_MISO  image
    -ESP32 Pin 21  --- CS_PIN    Touchscreen
-   -ESP32 Pin 34  --- TIRQ_PIN  Touchscreen      
+   -ESP32 Pin 34  --- TIRQ_PIN  Touchscreen
+   -Dimming mode  ---3.3v ---LDR---LED Pin Display  You only need to connect an LDR in series to the LED pin of the display as in the diagram.      
    *****************************************************************************
+
+   !  //***  They must be reviewed and established by the user for correct operation !
+
 */
 
 #include <XPT2046_Touchscreen.h>                           // ili9341 Touch
@@ -107,10 +111,11 @@ Version Date Author Comment
 #define UART1rx 27                                         /// VE.Direct Pin Inverter TX---> RX Esp32
 #define UART1tx 14                                         /// VE.Direct Pin Inverter RX---> TX Esp32 en este codigo no se usa (solo se hace lectura con RXEsp32)
 #define UARTRate2 19200                                    /// VE.Direct Pin MPPT  no es necesario asignar, usar los pines previsto RX2 y TX2 en el ESP32
-#define ResetLoopDefault 400                               /// VE.Direct Pin Data Reset Cuenta atras para reseteo      los 3 deben ser igual  ResetMPTData ResetIVTData ResetLoopDefault
+#define ResetLoopDefault 200                               /// VE.Direct Pin Data Reset  ResetMPTData ResetIVTData ResetLoopDefault
 #define CurrSensPin 33                                     /// Current Sensor Pin charger control GPIO33 ADC1_5
-#define CurrSensRAWZero 2899                               /// Current Sensor RAWvalue 0 Amp (afectado por la tension de alimentacion del sensor)
-#define CurrSensRAWUnit 0.006                              /// Current Sensor RAWvalue 1 Amp (afectado por la tension de alimentacion del sensor) /147.1 por unidad que es lo mismo que multiplicar por eso 0.006...
+#define CurrSensRAWZero 2899                               /// Current Sensor RAWvalue 0 Amp (afectado por la tension de alimentacion del sensor)   4095 / 2            = 2047.5
+#define CurrSensRAWUnit 0.0064                             /// Current Sensor RAWvalue 1 Amp (afectado por la tension de alimentacion del sensor)      1 / (20A/2047.5) = 102.3 por 1A que es lo mismo que multiplicar por eso 0.006...
+#define CurrSensAVG 256                                    /// Current Sensor Average Calcul
 #define TFT_DC 2                                           /// Display ili9341 pin para imagen
 #define TFT_CS 15                                          /// Display ili9341 pin para imagen
 #define TFT_MOSI 23                                        /// Display ili9341 pin para imagen (no se especifica en "Adafruit_ILI9341 tft" para evitar el [SPI Software limitado a 400Khz Max]; es mejor [SPI Material integrada puede alcanzar Mhz]
@@ -121,103 +126,92 @@ Version Date Author Comment
 #define TIRQ_PIN  34                                       /// Display ili9341 pin para Touch GPIO34 [pendiente probar no usado especificamente en esta version]
 #define TxtSize1 &FreeSansBold9pt7b                        /// Display ili9341 Fonts
 #define TxtSize2 &FreeSansBold18pt7b                       /// Display ili9341 Fonts
-#define CirclRad  3                                        /// Imagen Animacion Bola tamaño Radio
-#define CirclColor 0x4C5A                                  /// Imagen Animacion Bola Color Azul Victron Energy efecto de la bola animada por el cable
-#define TextColorBlue 0x4C5A                               /// Imagen Text Color Azul         Menu Home Azul Victron Energy
-#define TextColorRed 0xc1c5                                /// Imagen Text Color Rojo         Menu Home de Charger
-#define TextColorOrange 0xf4c2                             /// Imagen Text Color Naranja      Menu Home de Solar & MPPT
-#define TextColorGreen 0x254b                              /// Imagen Text Color Verde        Menu Home de Load enchfes de casa alimantados por Inverter 0x256c 0x254b 
-#define TextColorWhite ILI9341_WHITE                       /// Imagen Text Color Blanco       para escribir sobre fondo de colores o borrar sobre fondo blanco
-#define TextColorBlack ILI9341_BLACK                       /// Imagen Text Color Black        escribir sobre fondo blanco
-#define LedRad 4                                           /// Imagen Led Estado tamaño Radio ( simula un led en el display )
-#define LedMPPTX 221                                       /// Imagen Menu Home MPPT Led estado Cursor eje X
-#define LedMPPTY 115                                       /// Imagen Menu Home MPPT Led estado Cursor eje Y
-#define LedIVTX 160                                        /// Imagen Menu Home Inverter Led estado Cursor eje X
-#define LedIVTY 37                                         /// Imagen Menu Home Inverter Led estado Cursor eje Y
-#define ChrgBatStrtX 56                                    /// Imagen Menu Home Animacion Bola de Charger a Battery eje X
-#define ChrgBatFinY 129                                    /// Imagen Menu Home Animacion Bola de Charger a Battery eje Y
-#define ChrgInvrtStrtY 52                                  /// Imagen Menu Home Animacion Bola de Charger a Inverter eje Y
-#define ChrgInvrtFinX 126                                  /// Imagen Menu Home Animacion Bola de Charger a Inverter eje X
-#define LoadStrtY 52                                       /// Imagen Menu Home Animacion Bola de Inverter a Load eje Y
-#define LoadFinX 220                                       /// Imagen Menu Home Animacion Bola de Inverter a Load eje X
-#define BATStrtY 150.5                                     /// Imagen Menu Home Animacion Bola de Bateria a Inverter eje Y
-#define SolarStrtY 150.5                                   /// Imagen Menu Home Animacion Bola de Solar a Bateria eje Y
-#define SolarFinX 162                                      /// Imagen Menu Home Animacion Bola de Solar a Bateria eje X
-#define InvrtStrtX  160                                    /// Imagen Menu Home Animacion Bola de Solar+Bateria a Inverter eje X    
-#define InvrtFinY 92                                       /// Imagen Menu Home Animacion Bola de Solar+Bateria a Inverter eje Y   
-#define ChrgBatStrtYDef 83                                 /// Imagen Menu Home Animacion Bola de Charger a Bateria eje Y          Range
-#define ChrgInvrtStrtXDef 99                               /// Imagen Menu Home Animacion Bola de Charger a Inverter eje X         Range
-#define LoadStrtXDef 192                                   /// Imagen Menu Home Animacion Bola de Inverter a Load eje X            Range
-#define BATStrtXDef 99                                     /// Imagen Menu Home Animacion Bola de Bateria a Inverter eje X         Range
-#define BATFinXDef 162                                     /// Imagen Menu Home Animacion Bola de Solar a Bateria eje X            Range
-#define SolarStrtXDef 220                                  /// Imagen Menu Home Animacion Bola de Solar Bateria Inverter eje X     Range
-#define InvrtStrtYDef 150                                  /// Imagen Menu Home Animacion Bola de Solar Bateria Inverter eje Y     Range
-#define TchHomeXmin 1600                                   /// Al tocar Go Back return to Home Cursor X Min   if ((p.x > TchHomeXmin && p.x < TchHomeXmax) && (p.y > TchHomeYmin && p.y < TchHomeYmax)) {
-#define TchHomeXmax 2600                                   /// Al tocar Go Back return to Home Cursor X Max
-#define TchHomeYmin 340                                    /// Al tocar Go Back return to Home Cursor Y Min
-#define TchHomeYmax 1380                                   /// Al tocar Go Back return to Home Cursor Y Max
-#define TchSolarXmin 360                                   /// Al tocar Go Menu Solar Cursor X min            if ((p.x > TchSolarXmin && p.x < TchSolarXmax) && (p.y > TchSolarYmin && p.y < TchSolarYmax)) {
-#define TchSolarXmax 1400                                  /// Al tocar Go Menu Solar Cursor X max
-#define TchSolarYmin 400                                   /// Al tocar Go Menu Solar Cursor Y min
-#define TchSolarYmax 2230                                  /// Al tocar Go Menu Solar Cursor Y max
-#define TchBatXmin 2870                                    /// Al tocar Go Menu Bateria Cursor X min          if ((p.x > TchBatXmin && p.x < TchBatXmax) && (p.y > TchBatYmin && p.y < TchBatYmax)) {
-#define TchBatXmax 3850                                    /// Al tocar Go Menu Bateria Cursor X max 
-#define TchBatYmin 350                                     /// Al tocar Go Menu Bateria Cursor Y min 
-#define TchBatYmax 1820                                    /// Al tocar Go Menu Bateria Cursor Y max 
-#define TchChrgXmin 2800                                   /// Al tocar Go Menu Charger Cursor X min          if ((p.x > ChrgXmin && p.x < ChrgXmax) && (p.y > ChrgYmin && p.y < ChrgYmax)) {
-#define TchChrgXmax 3850                                   /// Al tocar Go Menu Charger Cursor X max
-#define TchChrgYmin 2600                                   /// Al tocar Go Menu Charger Cursor Y min
-#define TchChrgYmax 3740                                   /// Al tocar Go Menu Charger Cursor Y max
-#define TchInvrtXmin 1670                                  /// Al tocar Go Menu Inverter Cursor X min         if ((p.x > TchInvrtXmin && p.x < TchInvrtXmax) && (p.y > TchInvrtYmin && p.y < 1TchInvrtYmax)) {
-#define TchInvrtXmax 2560                                  /// Al tocar Go Menu Inverter Cursor X max 
-#define TchInvrtYmin 2450                                  /// Al tocar Go Menu Inverter Cursor Y min 
-#define TchInvrtYmax 3740                                  /// Al tocar Go Menu Inverter Cursor Y max 
-#define TchLoadXmin 360                                    /// Al tocar Go Menu Load Cursor X min             if ((p.x > TchLoadXmin && p.x < TchLoadXmax) && (p.y > TchLoadYmin && p.y < TchLoadYmax)) {
-#define TchLoadXmax 1400                                   /// Al tocar Go Menu Load Cursor X max 
-#define TchLoadYmin 2600                                   /// Al tocar Go Menu Load Cursor Y min 
-#define TchLoadYmax 3740                                   /// Al tocar Go Menu Load Cursor Y max 
-#define VBatdataErrorL 18.4                                /// Bateria Control si el dato volt bat es inferiro se toma como un error de lectura
-#define VBatdataErrorH 35.4                                /// Bateria Control si el dato volt bat es superior se toma como un error de lectura
-#define LowBat 25.4                                        /// Bateria Control volt que considera minimo en su uso normal
-#define HighBat 28.4                                       /// Bateria Control volt que considera maximo en su uso normal
-#define BatLevel1 25.6                                     /// Bateria Control volt que considera 1/4 de nivel de carga
-#define BatLevel2 26.0                                     /// Bateria Control volt que considera 2/4 de nivel de carga
-#define BatLevel3 26.4                                     /// Bateria Control volt que considera 3/4 de nivel de carga
-#define BatLevel4 26.7                                     /// Bateria Control volt que considera 4/4 de nivel de carga
-#define MPTkWhHistAdd 103                                  /// MPPT kWh Perdidos por el usuario al poner a cero el contador (en mi caso falta 103kWh que sumare cada vez para tener el valor historico real)
-#define milliTo 0.001                                      /// Bateria Volt & Amp RAW valor es en   mV & mA * 0.001 = V & A por ejemplo  
-#define centesiTo 0.01                                     /// Inverter Usado con AC Volt & MPPT kWh
-#define decimTo 0.1                                        /// Inverter Usado con AC Amp
-#define IVTAmpInLoss 0.9                                   /// Inverter para poder estimar el Amp DC estimado aproximado con perdida de 0.9 = 9%  
-#define Warm1 "BATERIA BAJA"                               /// Inverter Warning code 1 Msg nivel demasiado bajo de bateria
-#define Warm2 "BATERIA ALTA"                               /// Inverter Warning code 2 Msg nivel demasiado alto de bateria
-#define Warm32 "TEMP BAJA"                                 /// Inverter Warning code 32 Msg Temperatura demasaido baja
-#define Warm64 "TEMP ALTA"                                 /// Inverter Warning code 64 Msg Temperatura demasaido alta
-#define Warm256 "SOBRECARGA"                               /// Inverter Warning code 256 Msg Sobrecarga solicitado enel output AC
-#define Warm512 "RUIDO ELECT"                              /// Inverter Warning code 512 Msg Ruido electrico interferencia anormal (a menudo podría ser condensadores defectuosos)
-#define Warm1024 "AC BAJO"                                 /// Inverter Warning code 1024 Msg AC Volt demasiado bajo
-#define Warm2048 "AC ALTO"                                 /// Inverter Warning code 2048 Msg AC Volt demasaido alto
-#define MenuTxtColorRst ILI9341_WHITE                      /// Imagen Text Blanco sobre fondo blanco sera como Borrar
-#define MenuTxtColor ILI9341_BLACK                         /// Imagen Text Negro  sobre fondo blanco sera como Escribir
+#define CirclRad  3                                        /// Image Animation BlueBall size 
+#define CirclColor 0x4C5A                                  /// Image Animation BBlueBall size  Blue Victron Energy
+#define TextColorBlue 0x4C5A                               /// Image Text Color Blue Victron Energy
+#define TextColorRed 0xc1c5                                /// Image Text Color Red Charger
+#define TextColorOrange 0xf4c2                             /// Image Text Color Orange MPPT
+#define TextColorGreen 0x254b                              /// Image Text Color Green Load
+#define TextColorWhite ILI9341_WHITE                       /// Image Text Color White 
+#define TextColorBlack ILI9341_BLACK                       /// Image Text Color Black      
+#define BatBarLevelColor ILI9341_GREENYELLOW               /// Battery Bar Level Color
+#define MPTCSColor0 ILI9341_BLACK                          /// MPPT Color 0 OFF
+#define MPTCSColor2 ILI9341_RED                            /// MPPT Color2 FAULT
+#define MPTCSColor3 ILI9341_BLUE                           /// MPPT Color 3 BULK
+#define MPTCSColor4 ILI9341_YELLOW                         /// MPPT Color 4 ABSORPTION
+#define MPTCSColor5 ILI9341_GREEN            /             /// MPPT Color 5 FLOAT
+#define LedRad 4                                           /// Image Led Estado tamaño Radio ( simula un led en el display )
+#define LedMPPTX 235                                       /// Image Menu Home MPPT Led estado Cursor eje X
+#define LedMPPTY 116                                       /// Image Menu Home MPPT Led estado Cursor eje Y
+#define LedIVTX 160                                        /// Image Menu Home Inverter Led estado Cursor eje X
+#define LedIVTY 37                                         /// Image Menu Home Inverter Led estado Cursor eje Y
+#define ChrgBatStrtX 56                                    /// Image Menu Home Animacion Bola de Charger a Battery eje X
+#define ChrgBatFinY 118                                    /// Image Menu Home Animacion Bola de Charger a Battery eje Y
+#define ChrgInvrtStrtY 52                                  /// Image Menu Home Animacion Bola de Charger a Inverter eje Y
+#define ChrgInvrtFinX 116                                  /// Image Menu Home Animacion Bola de Charger a Inverter eje X
+#define LoadStrtY 52                                       /// Image Menu Home Animacion Bola de Inverter a Load eje Y
+#define LoadFinX 211                                       /// Image Menu Home Animacion Bola de Inverter a Load eje X
+#define BATStrtY 150.5                                     /// Image Menu Home Animacion Bola de Bateria a Inverter eje Y
+#define SolarStrtY 150.5                                   /// Image Menu Home Animacion Bola de Solar a Bateria eje Y
+#define SolarFinX 170                                      /// Image Menu Home Animacion Bola de Solar a Bateria eje X
+#define InvrtStrtX  160                                    /// Image Menu Home Animacion Bola de Solar+Bateria a Inverter eje X    
+#define InvrtFinY 104                                      /// Image Menu Home Animacion Bola de Solar+Bateria a Inverter eje Y   
+#define ChrgBatStrtYDef 94                                 /// Image Menu Home Animacion Bola de Charger a Bateria eje Y          Range
+#define ChrgInvrtStrtXDef 108                              /// Image Menu Home Animacion Bola de Charger a Inverter eje X         Range
+#define LoadStrtXDef 203                                   /// Image Menu Home Animacion Bola de Inverter a Load eje X            Range
+#define BATStrtXDef 110                                    /// Image Menu Home Animacion Bola de Bateria a Inverter eje X         Range
+#define BATFinXDef 150                                     /// Image Menu Home Animacion Bola de Solar a Bateria eje X            Range
+#define SolarStrtXDef 210                                  /// Image Menu Home Animacion Bola de Solar Bateria Inverter eje X     Range
+#define InvrtStrtYDef 141                                  /// Image Menu Home Animacion Bola de Solar Bateria Inverter eje Y     Range
+#define TchHomeXmin 1600                                   /// Touch Go Back return to Home Cursor X Min   if ((p.x > TchHomeXmin && p.x < TchHomeXmax) && (p.y > TchHomeYmin && p.y < TchHomeYmax)) {
+#define TchHomeXmax 2600                                   /// Touch Go Back return to Home Cursor X Max
+#define TchHomeYmin 340                                    /// Touch Go Back return to Home Cursor Y Min
+#define TchHomeYmax 1380                                   /// Touch Go Back return to Home Cursor Y Max
+#define TchSolarXmin 360                                   /// Touch Go Menu Solar Cursor X min            if ((p.x > TchSolarXmin && p.x < TchSolarXmax) && (p.y > TchSolarYmin && p.y < TchSolarYmax)) {
+#define TchSolarXmax 1400                                  /// Touch Go Menu Solar Cursor X max
+#define TchSolarYmin 400                                   /// Touch Go Menu Solar Cursor Y min
+#define TchSolarYmax 2230                                  /// Touch Go Menu Solar Cursor Y max
+#define TchBatXmin 2870                                    /// Touch Go Menu Bateria Cursor X min          if ((p.x > TchBatXmin && p.x < TchBatXmax) && (p.y > TchBatYmin && p.y < TchBatYmax)) {
+#define TchBatXmax 3850                                    /// Touch Go Menu Bateria Cursor X max 
+#define TchBatYmin 350                                     /// Touch Go Menu Bateria Cursor Y min 
+#define TchBatYmax 1820                                    /// Touch Go Menu Bateria Cursor Y max 
+#define TchChrgXmin 2800                                   /// Touch Go Menu Charger Cursor X min          if ((p.x > ChrgXmin && p.x < ChrgXmax) && (p.y > ChrgYmin && p.y < ChrgYmax)) {
+#define TchChrgXmax 3850                                   /// Touch Go Menu Charger Cursor X max
+#define TchChrgYmin 2600                                   /// Touch Go Menu Charger Cursor Y min
+#define TchChrgYmax 3740                                   /// Touch Go Menu Charger Cursor Y max
+#define TchInvrtXmin 1670                                  /// Touch Go Menu Inverter Cursor X min         if ((p.x > TchInvrtXmin && p.x < TchInvrtXmax) && (p.y > TchInvrtYmin && p.y < 1TchInvrtYmax)) {
+#define TchInvrtXmax 2560                                  /// Touch Go Menu Inverter Cursor X max 
+#define TchInvrtYmin 2450                                  /// Touch Go Menu Inverter Cursor Y min 
+#define TchInvrtYmax 3740                                  /// Touch Go Menu Inverter Cursor Y max 
+#define TchLoadXmin 360                                    /// Touch Go Menu Load Cursor X min             if ((p.x > TchLoadXmin && p.x < TchLoadXmax) && (p.y > TchLoadYmin && p.y < TchLoadYmax)) {
+#define TchLoadXmax 1400                                   /// Touch Go Menu Load Cursor X max 
+#define TchLoadYmin 2600                                   /// TouchGo Menu Load Cursor Y min 
+#define TchLoadYmax 3740                                   /// Touch Go Menu Load Cursor Y max 
 #define MenuColumn1X 20                                    /// Imagen Text SubMenu  Primera Linea de Texto en la primera columna eje X         
 #define MenuColumn1Y 125                                   /// Imagen Text SubMenu Primera Linea de Texto en la primera columna eje Y         
 #define MenuColumn1NextLine 15                             /// Imagen Text SubMenu     Siguiente Linea de Texto en la primera columna eje Y 
 #define MenuColumn2X 130                                   /// Imagen Text SubMenu Primera Linea de Texto en la Segunda columna eje X       
 #define MenuColumn2Y 125                                   /// Imagen Text SubMenu Primera Linea de Texto en la Seguna columna eje Y       
 #define MenuColumn2NextLine 15                             /// Imagen Text SubMenu     Siguiente Linea de Texto en la Seguna columna eje Y
-#define ChrgAmpX 25                                        /// Charger Curent Sensor Amp Value show display eje x
+#define ChrgAmpX 33                                        /// Charger Curent Sensor Amp Value show display eje x
 #define ChrgAmpY 47                                        /// Charger Curent Sensor Amp Value show display eje y    
+#define ChrgAmpXtag 50                                     /// Charger Curent Sensor Tag "A" Home Menu   
+#define ChrgAmpYtag 19                                     /// Charger Curent Sensor Tag "A" Home Menu  
+#define BATAmpX 40                                         /// Imagen Text Menu Home Amp Charger to Battery Axis  X
+#define BATAmpY 150                                        /// Imagen Text Menu Home Amp Charger to Battery Axis  Y
 #define MPTVbatX 225                                       /// Imagen Text Menu Home MPPT Vbat Cursor Eje  X
 #define MPTVbatY 155                                       /// Imagen Text Menu Home MPPT Vbat Cursor Eje  Y
 #define IVTVbatX 140                                       /// Imagen Text Menu Home Inverter Vbat Cursor Eje  X
 #define IVTVbatY 81                                        /// Imagen Text Menu Home Inverter Vbat Cursor Eje  Y
-#define MPTVpvX 218                                        /// Imagen Text Menu Home MPPT Vpv Cursor Eje  X
+#define MPTVpvX 217                                        /// Imagen Text Menu Home MPPT Vpv Cursor Eje  X
 #define MPTVpvY 226                                        /// Imagen Text Menu Home MPPT Vpv Cursor Eje  Y
-#define MPTAmpX 275                                        /// Imagen Text Menu Home MPPT Amp pv Cursor Eje  X
-#define MPTAmpY 155                                        /// Imagen Text Menu Home MPPT Amp pv Cursor Eje  Y
-#define MPTPpvX 225                                        /// Imagen Text Menu Home MPPT Watt pv Cursor Eje  X
-#define MPTPpvY 196                                        /// Imagen Text Menu Home MPPT Watt pv Cursor Eje  Y
-#define MPTkWhX 263                                        /// Imagen Text Menu Home MPPT kWh pv Cursor Eje  X
+#define MPTAmpX 225                                        /// Imagen Text Menu Home MPPT Amp pv Cursor Eje  X
+#define MPTAmpY 173                                        /// Imagen Text Menu Home MPPT Amp pv Cursor Eje  Y
+#define MPTPpvX 227                                        /// Imagen Text Menu Home MPPT Watt pv Cursor Eje  X
+#define MPTPpvY 205                                        /// Imagen Text Menu Home MPPT Watt pv Cursor Eje  Y
+#define MPTPpvXtag 257                                     /// Imagen Text Menu Home tag Watt X
+#define MPTPpvYtag 123                                     /// Imagen Text Menu Home tag Watt Y
+#define MPTkWhX 249                                        /// Imagen Text Menu Home MPPT kWh pv Cursor Eje  X
 #define MPTkWhY 226                                        /// Imagen Text Menu Home MPPT kWh pv Cursor Eje  Y
 #define MPTWmaxX 225                                       /// Imagen Text Menu Home MPPT Watt Max pv Cursor Eje  X
 #define MPTWmaxY 138                                       /// Imagen Text Menu Home MPPT Watt Max pv Cursor Eje  Y
@@ -225,14 +219,22 @@ Version Date Author Comment
 #define MPTStatY 121                                       /// Imagen Text Menu Home MPPT Estado Cursor Eje  Y 
 #define IVTWarnX 107                                       /// Imagen Text Menu Home Inverter Warning Cursor Eje  X
 #define IVTWarnY 203                                       /// Imagen Text Menu Home Inverter Warning Cursor Eje  Y
-#define IVTACIX 225                                        /// Imagen Text Menu Home Inverter AC Amp eje X
-#define IVTACIY 40                                         /// Imagen Text Menu Home Inverter AC Amp eje Y
+#define IVTACIX 247                                        /// Imagen Text Menu Home Inverter AC Amp eje X
+#define IVTACIY 76                                         /// Imagen Text Menu Home Inverter AC Amp eje Y
+#define IVTACIXtag 252                                     /// Imagen Text Menu Home Inverter AC Amp eje X
+#define IVTACIYtag 19                                      /// Imagen Text Menu Home Inverter AC Amp eje Y
 #define IVTACVX 141                                        /// Imagen Text Menu Home Inverter AC Volt eje X
 #define IVTACVY 21                                         /// Imagen Text Menu Home Inverter AC Volt eje Y
-#define IVTACWX 222                                        /// Imagen Text Menu Home Inverter AC AV(aproximadamente Watt) eje X
-#define IVTACWY 80                                         /// Imagen Text Menu Home Inverter AC AV(aproximadamente Watt) eje Y
-#define IVTAmpInX 145                                      /// Imagen Text Menu Home Inverter Amp input estimado aproximado eje X
+#define IVTACWX 227                                        /// Imagen Text Menu Home Inverter AC AV(aproximadamente Watt) eje X
+#define IVTACWY 48                                         /// Imagen Text Menu Home Inverter AC AV(aproximadamente Watt) eje Y
+#define IVTAmpInX 143                                      /// Imagen Text Menu Home Inverter Amp input estimado aproximado eje X
 #define IVTAmpInY 61                                       /// Imagen Text Menu Home Inverter Amp input estimado aproximado eje Y
+#define MenuBackgroundX 0                                  /// Imagen Background Menu set Cursor X   Home, Solar, Inverter, MPPT, etc..
+#define MenuBackgroundY 2                                  /// Imagen Background Menu set Cursor Y
+#define hX  3.5                                            /// Menu Home Animation Reset image7x8
+#define hY  3                                              /// Menu Home Animation Reset image 
+#define vX  3.5                                            /// Menu Home Animation Reset image 9x10
+#define vY  5                                              /// Menu Home Animation Reset image 
 #define MPTVbatCL     "C1L1"                               /// Imagen Text SubMenu MPPT Columna Linea V bat seleccionar la columna y linea donde se mostrara cada dato
 #define MPTiCL        "C1L2"                               /// Imagen Text SubMenu MPPT Columna Linea A bat
 #define MPTVpvCL      "C1L3"                               /// Imagen Text SubMenu MPPT Columna Linea V pv
@@ -247,34 +249,6 @@ Version Date Author Comment
 #define MPTerrCL      "C2L5"                               /// Imagen Text SubMenu MPPT Columna Linea Errores
 #define MPTkWhAyerCL  "C2L6"                               /// Imagen Text SubMenu MPPT Columna Linea kWh ayer
 #define MPTWmaxAyerCL "C2L7"                               /// Imagen Text SubMenu MPPT Columna Linea Wmax ayer
-#define MenuSolarErr0Msg "Sin errores"                     /// Imagen Text SubMenu Solar MSG                          
-#define MenuSolarErr2Msg "V Bat alta"                      /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr17Msg "Temp alta"                      /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr18Msg "Amp alta"                       /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr19Msg "Amp invers"                     /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr20Msg "Bulk overtime"                  /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr21Msg "Amp Sens mal"                   /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr26Msg "Temp Terminales"                /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr33Msg "V PV alto"                      /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr34Msg "A PV alto"                      /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr38Msg "V Bat exceso"                   /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr116Msg "Calibration mal"               /// Imagen Text SubMenu Solar MSG 
-#define MenuSolarErr117Msg "Firmware mal"                  /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErr119Msg "Config user mal"               /// Imagen Text SubMenu Solar MSG
-#define MenuSolarCS0Msg "OFF"                              /// Imagen Text SubMenu Solar MSG                          
-#define MenuSolarCS2Msg "MPPT Falla"                       /// Imagen Text SubMenu Solar MSG
-#define MenuSolarCS3Msg "Carga Inicial"                    /// Imagen Text SubMenu Solar MSG
-#define MenuSolarCS4Msg "Absorcion"                        /// Imagen Text SubMenu Solar MSG
-#define MenuSolarCS5Msg "Floatacion"                       /// Imagen Text SubMenu Solar MSG
-#define MenuSolarErrtag ""                                 /// Imagen Text SubMenu Solar MSG
-#define MPTCStag ""                                        /// Imagen Text SubMenu Solar MSG
-#define MenuSolarMPTsertag "NS: "                          /// Imagen Text SubMenu Solar MSG     
-#define MenuSolarMPTpidtag "ID: "                          /// Imagen Text SubMenu Solar MSG
-#define MenuSolarMPTfwtag "FW: "                           /// Imagen Text SubMenu Solar MSG
-#define MenuSolarHSDStag "Dias: "                          /// Imagen Text SubMenu Solar MSG
-#define MenuSolarMPTWmaxAytag "Ayer:"                      /// Imagen Text SubMenu Solar MSG
-#define MenuSolarkWhAyertag "Ayer:"                        /// Imagen Text SubMenu Solar MSG
-#define MenuSolarMPTkWhHisttag "T.kWh"                     /// Imagen Text SubMenu Solar MSG
 #define IVTVbatCL "C1L2"                                   /// Imagen Text SubMenu Inverter Columna Linea V Bat
 #define IVTARCL "C1L3"                                     /// Imagen Text SubMenu Inverter Columna Linea Alarm
 #define IVTcsCL "C1L4"                                     /// Imagen Text SubMenu Inverter Columna Linea Estado
@@ -286,35 +260,6 @@ Version Date Author Comment
 #define IVTACICL "C2L3"                                    /// Imagen Text SubMenu Inverter Columna Linea AC Amp
 #define IVTACSCL "C2L4"                                    /// Imagen Text SubMenu Inverter Columna Linea AC AV (aproximadamente Watt)
 #define IVTWarnCL "C2L5"                                   /// Imagen Text SubMenu Inverter Columna Linea Warning
-#define MenuInverterCS0Msg "OFF"                           /// Imagen Text SubMenu Inverter MSg Estado 0  OFF     
-#define MenuInverterCS1Msg "LOWPOWER"                      /// Imagen Text SubMenu Inverter MSg Estado 1  Low Power 
-#define MenuInverterCS3Msg "FAULT"                         /// Imagen Text SubMenu Inverter MSg Estado 3  Fault ( necesita reinicio por parte del usuario)
-#define MenuInverterCS4Msg "ON"                            /// Imagen Text SubMenu Inverter MSg Estado 4  ON
-#define MenuInverterAR1Msg "low voltage"                   /// Imagen Text SubMenu Inverter Alarm 1 Low volt  
-#define MenuInverterAR2Msg "high voltage"                  /// Imagen Text SubMenu Inverter Alarm 2 High volt
-#define MenuInverterAR32Msg "Low Temp"                     /// Imagen Text SubMenu Inverter Alarm 32 Low Temperatura
-#define MenuInverterAR64Msg "High Temp"                    /// Imagen Text SubMenu Inverter Alarm 64 Alta temperatura 
-#define MenuInverterAR256Msg "OverLoad"                    /// Imagen Text SubMenu Inverter Alarm 256 Sobrecarga
-#define MenuInverterAR512Msg "DC Ripple"                   /// Imagen Text SubMenu Inverter Alarm 512 Ruido Interferencia en el circuito
-#define MenuInverterAR1024Msg "Low V AC Out"               /// Imagen Text SubMenu Inverter Alarm 1024 AC Volt muy bajo
-#define MenuInverterAR2048Msg "High V AC out"              /// Imagen Text SubMenu Inverter Alarm 2048 AC Volt muy alto
-#define MenuInvertermode2Msg " ON"                         /// Imagen Text SubMenu Inverter Modo 2 ON
-#define MenuInvertermode4Msg " OFF"                        /// Imagen Text SubMenu Inverter Modo 4 OFF
-#define MenuInvertermode5Msg " ECO"                        /// Imagen Text SubMenu Inverter MOdo 5 ECO
-#define MenuInverterwarn1Msg "LOW VOTL"                    /// Imagen Text SubMenu Inverter Warning 1 volt Bajo
-#define MenuInverterwarn2Msg "HIGH VOLT"                   /// Imagen Text SubMenu Inverter Warning 2 Volt alto
-#define MenuInverterwarn32Msg "LOW TEMP"                   /// Imagen Text SubMenu Inverter Warning 32 Temperatura Baja
-#define MenuInverterwarn64Msg "HIGH TEMP"                  /// Imagen Text SubMenu Inverter Warning 64 Temperatura Alta 
-#define MenuInverterwarn256Msg "OverLoad"                  /// Imagen Text SubMenu Inverter Warning 256 Sobracarga
-#define MenuInverterwarn512Msg "DC Ripple"                 /// Imagen Text SubMenu Inverter Warning 512 Ruido en la linea electrica
-#define MenuInverterwarn1024Msg   "LOW V AC out"           /// Imagen Text SubMenu Inverter Warning 1024 AC Volt muy bajo
-#define MenuInverterwarn2048Msg "High V AC out"            /// Imagen Text SubMenu Inverter Warning 2048 AC Volt muy alto
-#define MenuInverterfwtag "FW:"                            /// Imagen Text SubMenu Inverter Firmware
-#define MenuIVTpidtag "PID:"                               /// Imagen Text SubMenu Inverter Prodcuto ID
-#define MenuIVTsertag "SN:"                                /// Imagen Text SubMenu Inverter Numero de Serie NS
-#define MenuInverterwarntag ""                             /// Imagen Text SubMenu Inverter etiqueta para Warning
-#define MenuInverterARtag ""                               /// Imagen Text SubMenu Inverter etiqueta para Alarma
-#define MenuInverterModetag "Mode:"                        /// Imagen Text SubMenu Inverter etiqueta para Modo
 #define BATivtVbatCL "C1L1"                                /// Imagen Text SubMenu Bateria Columna Linea Volt 
 #define BATkWhCL "C1L2"                                    /// Imagen Text SubMenu Bateria Columna Linea kWh 
 #define BATTipCL "C1L3"                                    /// Imagen Text SubMenu Bateria Columna Linea Tipo ( LiFePo4 por ejemplo) 
@@ -326,120 +271,169 @@ Version Date Author Comment
 #define BATmptVbatCL "C2L1"                                /// Imagen Text SubMenu Bateria Columna Linea desde MPPT Volt medido
 #define BATAhCL "C2L2"                                     /// Imagen Text SubMenu Bateria Columna Linea Capacidad Ah 
 #define BATVoltCL "C2L3"                                   /// Imagen Text SubMenu Bateria Columna Linea Volt Tipico 
-#define BATVChargCL "C2L4"                                 /// Imagen Text SubMenu Bateria Columna Linea Volt de carga 
-#define batIVTVbattag "invt:"                              /// Imagen Text SubMenu Bateria Inverter Volt Bateria
-#define batMPTVbattag "mppt:"                              /// Imagen Text SubMenu Bateria MPPT Volt Bateria
-#define BATVolt "25.6V"                                    /// Imagen Text SubMenu Bateria Volt tipico                               
-#define BATVCharg "28.4V"                                  /// Imagen Text SubMenu Bateria Volt para carga
-#define BATAh "111Ah"                                      /// Imagen Text SubMenu Bateria Capacidad
-#define BATkWh "2.8416kWh"                                 /// Imagen Text SubMenu Bateria kWh equivalentes      
-#define BATTip "LiFePO4"                                   /// Imagen Text SubMenu Bateria tipo de tecnologia          
-#define BATDate "2021-03-22"                               /// Imagen Text SubMenu Bateria Fecha de fabricacion
-#define BATBrand "Pylontech"                               /// Imagen Text SubMenu Bateria Marca
-#define BATModel "UP2500NB01V00101"                        /// Imagen Text SubMenu Bateria Modelo
-#define BATSerialNumbr "PPTBP0xxxxxxxxxx"                  /// Imagen Text SubMenu Bateria Numero de Serie
-#define BATCell "IFpP/13/141/238/[(3P3S)2S+3P2S]M/0+50/95" /// Imagen Text SubMenu Bateria Celda tipologia estructura
-#define MenuBackgroundX 0                                  /// Imagen Background Menu set Cursor X   Home, Solar, Inverter, MPPT, etc..
-#define MenuBackgroundY 2                                  /// Imagen Background Menu set Cursor Y
-#define BatBarLevelColor ILI9341_GREENYELLOW // Barra de nivel de bateria Color
-#define BatBarLevels 4                       // Barra de nivel de bateriaCantidad de barra de nivel 
-#define BatBarLevelRadius 3                  // Barra de nivel de bateriaEsquina redondeadas con radio de 3 pixel
-#define BatBarLevelHeight 15                 // Barra de nivel de bateria alto de cada barra de nivel
-#define BatBarLevelWidth 70                  // Barra de nivel de bateriaancho de cada barra de nivel
-#define BatBarLevelNextY 20                  // Barra de nivel de bateriaSeparacion entre las barra de nivel
-#define BatBarLevel1y 204                    // Barra de nivel de baterialevel 1 eje y
-#define BatBarLevelx 20                      // Barra de nivel de baterialevel 0 eje X
-#define BatBarLevel0y 134                    // Barra de nivel de baterialevel 0 eje y
-#define BatBarLevel0w 70                     // Barra de nivel de baterialevel 0 ancho
-#define BatBarLevel0h 72                     // Barra de nivel de baterialevel 0 Alto
-#define MPTCSColor0 ILI9341_BLACK            // MPPT estado color del falso led mostrado en pantalla para estado 0 OFF
-#define MPTCSColor2 ILI9341_RED              // MPPT estado color del falso led mostrado en pantalla para estado 2 FAULT (1 no es un estado valido para mppt)
-#define MPTCSColor3 ILI9341_BLUE             // MPPT estado color del falso led mostrado en pantalla para estado 3 BULK
-#define MPTCSColor4 ILI9341_YELLOW           // MPPT estado color del falso led mostrado en pantalla para estado 4 ABSORPTION
-#define MPTCSColor5 ILI9341_GREEN            // MPPT estado color del falso led mostrado en pantalla para estado 5 FLOAT
-#define CHRGCurrSensCL "C1L1"                // Image Text SubMenu Charger Amp
-#define CHRGMPTVbatCL "C1L2"                 // Image Text SubMenu Charger Volt Bat MPPT
-#define BatAmpX 110                          // Image Text Menu Home Bateria Amp eje X
-#define BatAmpY 142                          // Image Text Menu Home Bateria Amp eje Y
-#define Zero 0                               // Image Text Menu Home Bateria Amp eje Y 
-#define msLoop 125                           // Loop ms millis
+#define BATVChargCL "C2L4"                                 /// Imagen Text SubMenu Bateria Columna Linea Volt de carga
+#define CHRGCurrSensCL "C1L1"                              /// Image Text SubMenu Charger Amp
+#define CHRGMPTVbatCL "C1L2"                               /// Image Text SubMenu Charger Volt Bat MPPT
+#define BatBarLevels 4                                     /// Bar battery Level number 4
+#define BatBarLevelRadius 3                                /// Bar battery Level round corner
+#define BatBarLevelHeight 15                               /// Bar battery Level Height
+#define BatBarLevelWidth 70                                /// Bar battery Level Width
+#define BatBarLevelNextY 20                                /// Bar battery Level Space
+#define BatBarLevel1y 215                                  /// Bar battery Level 1 axis Y
+#define BatBarLevelx 20                                    /// Bar battery Level 0 axis X
+#define BatBarLevel0y 150                                  /// Bar battery Level 0 axis y
+#define BatBarLevel0w 70                                   /// Bar battery Level 0 Width
+#define BatBarLevel0h 72                                   /// Bar battery Level 0 Height
+#define DayHr 24                                           /// 24h one day It is used to calculate the maximum possible kWh in a day.
+#define Zero 0                                             /// Zero
+#define One 1                                              /// One
+#define Two 2                                              /// Two
+#define Tree 3                                             /// Tree
+#define milliTo 0.001                                      /// 0.001
+#define centesiTo 0.01                                     /// 0.01
+#define decimTo 0.1                                        /// 0.1
+#define decuTo 0.5                                         /// 5
+#define decaTo 10                                          /// 10
+#define Warm1 "BATERIA BAJA"                               //*** Inverter Warning code 1 Msg nivel demasiado bajo de bateria
+#define Warm2 "BATERIA ALTA"                               //*** Inverter Warning code 2 Msg nivel demasiado alto de bateria
+#define Warm32 "TEMP BAJA"                                 //*** Inverter Warning code 32 Msg Temperatura demasaido baja
+#define Warm64 "TEMP ALTA"                                 //*** Inverter Warning code 64 Msg Temperatura demasaido alta
+#define Warm256 "SOBRECARGA"                               //*** Inverter Warning code 256 Msg Sobrecarga solicitado enel output AC
+#define Warm512 "RUIDO ELECT"                              //*** Inverter Warning code 512 Msg Ruido electrico interferencia anormal (a menudo podría ser condensadores defectuosos)
+#define Warm1024 "AC BAJO"                                 //*** Inverter Warning code 1024 Msg AC Volt demasiado bajo
+#define Warm2048 "AC ALTO"                                 //*** Inverter Warning code 2048 Msg AC Volt demasaido alto
+#define MenuSolarErr0Msg "Sin errores"                     //*** Image Text SubMenu Solar MSG                          
+#define MenuSolarErr2Msg "V Bat alta"                      //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr17Msg "Temp alta"                      //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr18Msg "Amp alta"                       //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr19Msg "Amp invers"                     //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr20Msg "Bulk overtime"                  //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr21Msg "Amp Sens mal"                   //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr26Msg "Temp Terminales"                //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr33Msg "V PV alto"                      //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr34Msg "A PV alto"                      //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr38Msg "V Bat exceso"                   //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr116Msg "Calibration mal"               //*** Image Text SubMenu Solar MSG 
+#define MenuSolarErr117Msg "Firmware mal"                  //*** Image Text SubMenu Solar MSG
+#define MenuSolarErr119Msg "Config user mal"               //*** Image Text SubMenu Solar MSG
+#define MenuSolarCS0Msg "OFF"                              //*** Image Text SubMenu Solar MSG                          
+#define MenuSolarCS2Msg "MPPT Falla"                       //*** Image Text SubMenu Solar MSG
+#define MenuSolarCS3Msg "Carga Inicial"                    //*** Image Text SubMenu Solar MSG
+#define MenuSolarCS4Msg "Absorcion"                        //*** Image Text SubMenu Solar MSG
+#define MenuSolarCS5Msg "Floatacion"                       //*** Image Text SubMenu Solar MSG
+#define MenuInverterCS0Msg "OFF"                           //*** Image Text SubMenu Inverter MSg Estado 0  OFF     
+#define MenuInverterCS1Msg "LOWPOWER"                      //*** Image Text SubMenu Inverter MSg Estado 1  Low Power 
+#define MenuInverterCS3Msg "FAULT"                         //*** Image Text SubMenu Inverter MSg Estado 3  Fault ( necesita reinicio por parte del usuario)
+#define MenuInverterCS4Msg "ON"                            //*** Image Text SubMenu Inverter MSg Estado 4  ON
+#define MenuInverterAR1Msg "low voltage"                   //*** Image Text SubMenu Inverter Alarm 1 Low volt  
+#define MenuInverterAR2Msg "high voltage"                  //*** Image Text SubMenu Inverter Alarm 2 High volt
+#define MenuInverterAR32Msg "Low Temp"                     //*** Image Text SubMenu Inverter Alarm 32 Low Temperatura
+#define MenuInverterAR64Msg "High Temp"                    //*** Image Text SubMenu Inverter Alarm 64 Alta temperatura 
+#define MenuInverterAR256Msg "OverLoad"                    //*** Image Text SubMenu Inverter Alarm 256 Sobrecarga
+#define MenuInverterAR512Msg "DC Ripple"                   //*** Image Text SubMenu Inverter Alarm 512 Ruido Interferencia en el circuito
+#define MenuInverterAR1024Msg "Low V AC Out"               //*** Image Text SubMenu Inverter Alarm 1024 AC Volt muy bajo
+#define MenuInverterAR2048Msg "High V AC out"              //*** Image Text SubMenu Inverter Alarm 2048 AC Volt muy alto
+#define MenuInvertermode2Msg " ON"                         //*** Image Text SubMenu Inverter Modo 2 ON
+#define MenuInvertermode4Msg " OFF"                        //*** Image Text SubMenu Inverter Modo 4 OFF
+#define MenuInvertermode5Msg " ECO"                        //*** Image Text SubMenu Inverter MOdo 5 ECO
+#define MenuInverterwarn1Msg "LOW VOTL"                    //*** Image Text SubMenu Inverter Warning 1 volt Bajo
+#define MenuInverterwarn2Msg "HIGH VOLT"                   //*** Image Text SubMenu Inverter Warning 2 Volt alto
+#define MenuInverterwarn32Msg "LOW TEMP"                   //*** Image Text SubMenu Inverter Warning 32 Temperatura Baja
+#define MenuInverterwarn64Msg "HIGH TEMP"                  //*** Image Text SubMenu Inverter Warning 64 Temperatura Alta 
+#define MenuInverterwarn256Msg "OverLoad"                  //*** Image Text SubMenu Inverter Warning 256 Sobracarga
+#define MenuInverterwarn512Msg "DC Ripple"                 //*** Image Text SubMenu Inverter Warning 512 Ruido en la linea electrica
+#define MenuInverterwarn1024Msg   "LOW V AC out"           //*** Image Text SubMenu Inverter Warning 1024 AC Volt muy bajo
+#define MenuInverterwarn2048Msg "High V AC out"            //*** Image Text SubMenu Inverter Warning 2048 AC Volt muy alto
+#define BATVolt "25.6V"                                    //*** Hardware Spec Imagen Text SubMenu Bateria Volt tipico                               
+#define BATVCharg "28.4V"                                  //*** Hardware Spec Imagen Text SubMenu Bateria Volt para carga
+#define BATAh "111Ah"                                      //*** Hardware Spec Imagen Text SubMenu Bateria Capacidad
+#define BATkWh "2.8416kWh"                                 //*** Hardware Spec Imagen Text SubMenu Bateria kWh equivalentes      
+#define BATTip "LiFePO4"                                   //*** Hardware Spec Imagen Text SubMenu Bateria tipo de tecnologia          
+#define BATDate "2021-03-22"                               //*** Hardware Spec Imagen Text SubMenu Bateria Fecha de fabricacion
+#define BATBrand "Pylontech"                               //*** Hardware Spec Imagen Text SubMenu Bateria Marca
+#define BATModel "UP2500NB01V00101"                        //*** Hardware Spec Imagen Text SubMenu Bateria Modelo
+#define BATSerialNumbr "PPTBP0xxxxxxxxxx"                  //*** Hardware Spec Imagen Text SubMenu Bateria Numero de Serie
+#define BATCell "IFpP/13/141/238/[(3P3S)2S+3P2S]M/0+50/95" //*** Hardware Spec Imagen Text SubMenu Bateria Celda tipologia estructura
+#define BatLevel1 25.6                                     //*** Hardware Spec Bateria Control volt bar level 1/4 
+#define BatLevel2 26.0                                     //*** Hardware Spec Bateria Control volt bar level 2/4 
+#define BatLevel3 26.4                                     //*** Hardware Spec Bateria Control volt bar level 3/4
+#define BatLevel4 26.7                                     //*** Hardware Spec Bateria Control volt bar level 4/4 
+#define MPTkWhHistAdd 103                                  //*** Hardware Spec MPPT kWh Lost by the user when resetting the counter (in my case 103kWh is missing which I will add each time to have the real historical value)
+#define MPPTVmax 145                                       //*** Hardware Spec MPPT Spec Volt Max MPPT user defined  150 35
+#define MPPTAmax 35                                        //*** Hardware Spec  MPPT Spec Amp  Max MPPT user defined  150 35
+#define MPPTWmax 1000                                      //*** Hardware Spec  MPPT Spec Watt max depends on the type of voltage used 24V = 1000W limited
+#define InverterVacmin 225.4                               //*** Hardware Spec  Inverter Spec 230 -2%
+#define InverterVac 230                                    //*** Hardware Spec  Inverter Spec 230 -2%
+#define InverterVacmax 234.6                               //*** Hardware Spec  Inverter Spec 230 +2%
+#define InverterVbatmin 18.6                               //*** Hardware Spec  Inverter Spec volt battery min
+#define InverterVbatmax 34                                 //*** Hardware Spec  Inverter Spec volt battery maxç
+#define InverterIbatmax 70                                 //*** Hardware Spec  Inverter Spec Amp input max = wmax/vbatmax
+#define InverterWmax 2400                                  //*** Hardware Spec  Inverter Spec VA max ( 3000VA +/- 2400W )
+#define InverterEfimax 94                                  //*** Hardware Spec  Inverter Spec Efficiency Maxi 94%          (- =*0.94) (+ =*1.94) 
+#define InverterLossmin 1.06                               //*** Hardware Spec  Inverter Spec minimum Loss 100-94= 6%    (- =*0.06) (+ =*1.06) 
+#define ChargerImax 16                                     //*** Hardware Spec Charger Spec Amp max 16A
 
-String IVTCSStrg;                    /// Inverter String Estado
+#define msLoop 150                   //// Loop ms millis
+unsigned long previousMillis = 0;    //// Delay
+unsigned long currentMillis = 0;     //// Delay
+
 String IVTCSStrgmsg;                 /// Inverter String Estado msg
-String IVTARStrg;                    /// Inverter String Alarmas
 String IVTARStrgmsg;                 /// Inverter String Alarmas msg
 String IVTfwStrg;                    /// Inverter String Firmware
 String IVTpidStrg;                   /// Inverter String Producto ID
 String IVTSERStrg;                   /// Inverter String numero serie NS
-String IVTModeStrg;                  /// Inverter String Modo
 String IVTmodeStrgmsg;               /// Inverter String Modo msg
-String IVTACVStrg;                   /// Inverter String AC volt
-String IVTACIStrg;                   /// Inverter String AC Amp
-String IVTACSStrg;                   /// Inverter String AC Watt
-String IVTWarnStrg;                  /// Inverter String Alarma
 String IVTWarnStrgmsg;               /// Inverter String Warm msg
-String IVTVbatStrg;                  /// Inverter StringBat V 
-String Origin="MPPT";                /// VE.Direct Lectura de datos organizado por Origen   MPPT o Inverter
-String label="V";                    /// VE.Direct Lectura de datos tipo de lectura         V, VPV, PPV, AC V, AC I, ALARM, WARM, ... 
-String val="0";                      /// VE.Direct Lectura de datos valor de lectura        26.4v, error4, ...
-String MPTErrorStrg;                 /// MPPT String Error 
 String MPTErrorStrgmsg;              /// MPPT Msg Error
-String MPTCSStrg;                    /// MPPT String Estado
 String MPTCSStrgmsg;                 /// MPPT Msg Estado
 String MPTSERStrg;                   /// MPPT String Numero de Serie del producto 
 String MPTpidStrg;                   /// MPPT String ID del Producto
 String MPTfwStrg;                    /// MPPT String Firmware
-String MPTWmaxAyerStrg;              /// MPPT String Wmax Ayer
-String MPTkWhAyerStrg;               /// MPPT String kWh Ayer 
-String MPTVbatStrg;                  /// MPPT String Volt Bat 
-String MPTVpvStrg;                   /// MPPT String Volt Solar panel
-String MPTPpvStrg;                   /// MPPT String Watt Solar panel
-String MPTAmpStrg;                   /// MPPT String Amp
-String MPTkWhStrg;                   /// MPPT String kWh HOY
-String MPTWmaxStrg;                  /// MPPT String W max HOY
-String MPTkWhHistStrg;               /// MPPT String kWh historico
-
-String MenuCL="C1L1";                       /// Imagen Text Linea y Columna elegida                                    (no usado en Menu Home, solo submenu Solar, Charger, Inverter Bateria ..)
+String MenuCL="C1L1";                /// Imagen Text Linea y Columna elegida                                    (no usado en Menu Home, solo submenu Solar, Charger, Inverter Bateria ..)
 String MenuPresent="Home";           /// Menu en Display actualmente
-String MenuSelected="Home";                 /// Menu Solicitado al tocar la pantalla
+String MenuSelected="Home";          /// Menu Solicitado al tocar la pantalla
+String Origin="MPP";                 /// VE.Direct Lectura de datos organizado por Origen   MPPT o Inverter
+String label="V";                    /// VE.Direct Lectura de datos tipo de lectura         V, VPV, PPV, AC V, AC I, ALARM, WARM, ... 
+String val="0";                      /// VE.Direct Lectura de datos valor de lectura        26.4v, error4, ...
 
-int MovSpeed= 1;                     /// Imagen Animacion Bola Animada Velociad de movimiento depende tambien del loop -->  pixel por loop
-int IVTCS=99;                           /// Inverter Estado integral
-int IVTMode=99;                         /// Inverter Modo integral
-int IVTACV=99;                          /// Inverter AC Volt
-float IVTACI=99;                        /// Inverter AC Amp
-int IVTACS=99;                          /// Inverter AV "aproximadamente Watt AC"
-int IVTWarn=99;                         /// Inverter Warning
-int IVTAR=99;                           /// Inverter Alarm
-float IVTAmpIn=99;                      /// Inverter Amp Input (DC) Estimados aproximado 9% perdida esto no tiene en cuenta carga inductiva o resistiva
-float IVTVbat=99;                       /// Inverter Bateria Volt
-float MPTVbat=99;                       /// MPPT Bateria Volt   float para poder calcular el % correctamente necesita decimales
-int16_t MPTVpv=99;                      /// MPPT Solar Volt paneles
-int16_t MPTPpv=99;                      /// MPPT Watt Solar panel
-int16_t MPTAmp=99;                      /// MPPT Amp
-int16_t MPTkWh=99;                      /// MPPT kWh HOY
-int16_t MPTWmax=99;                     /// MPPT W max HOY
-int MPTkWhHist=99;                      /// MPPT kWh Historico
-int MPTError=99;                        /// MPPT error int                                           
-int MPTCS=99;                           /// MPPT estado int
-int MPTWmaxAyer=99;                     /// MPPT Wmax Ayer int
-int MPTkWhAyer=99;                      /// MPPT kWh Ayer int
-int ChrgBatStrtY = 83;               /// Imagen Menu Home Animacion Bola de Charger a Bateria eje Y     Down
-int ChrgInvrtStrtX = 99;             /// Imagen Menu Home Animacion Bola de Charger a Inverter eje X    Right
-int LoadStrtX = 192;                 /// Imagen Menu Home Animacion Bola de Inverter a Load eje X       Right
-int BATStrtX = 99;                   /// Imagen Menu Home Animacion Bola de Bateria a Inverter eje X    Right
-int BATFinX = 162;                   /// Imagen Menu Home Animacion Bola de Solar a Bateria eje X       Left
-int SolarStrtX = 220;                /// Imagen Menu Home Animacion Bola de SolarBat a Inverter eje X   Left
-int InvrtStrtY = 150;                /// Imagen Menu Home Animacion Bola de BatSolar a Inverter eje Y   UP
-uint8_t ResetMPTData=200;            /// VE.Direct Data Reset MPPT Cuando fallas XX lecturas se resetean los datos      los 3 deben ser igual    ResetMPTData   ResetIVTData ResetLoopDefault 
-uint8_t ResetIVTData=200;            /// VE.Direct Data Reset Inverter Cuando fallas XX lecturas se resetean los datos  los 3 deben ser igual    ResetMPTData   ResetIVTData ResetLoopDefault 
-int TchX=0;                          /// Menu eje X Colocacion de background para el menu solicitado
-int TchY=0;                          /// Menu eje Y ...
-int CurrSens=0;                      /// Charger Current Sensr AMp Value show display buffer memoria
-float BatAmp=99;
+uint16_t i=0;                        /// Genreal Use Used in counter
+uint8_t MovSpeed= 1;                 /// Imagen Animacion Bola Animada Velociad de movimiento depende tambien del loop -->  pixel por loop
+uint16_t IVTMode;                    /// Inverter Modo integral
+float IVTACV;                        /// Inverter AC Volt
+float IVTACI;                        /// Inverter AC Amp
+uint16_t IVTACS;                     /// Inverter AV "aproximadamente Watt AC"
+float IVTAmpIn;                      /// Inverter Amp Input (DC) Estimados aproximado 9% perdida esto no tiene en cuenta carga inductiva o resistiva
+float IVTVbat;                       /// Inverter Bateria Volt
+float MPTVbat;                       /// MPPT Bateria Volt   float para poder calcular el % correctamente necesita decimales
+float MPTVpv;                        /// MPPT Solar Volt paneles
+uint16_t MPTPpv;                     /// MPPT Watt Solar panel
+uint16_t MPTAmp;                     /// MPPT Amp
+uint16_t MPTkWh;                     /// MPPT kWh HOY
+uint16_t MPTWmax;                    /// MPPT W max HOY
+int MPTkWhHist;                      /// MPPT kWh Historico                                       
+uint8_t MPTCS;                       /// MPPT estado int
+int MPTWmaxAyer;                     /// MPPT Wmax Ayer int
+int MPTkWhAyer;                      /// MPPT kWh Ayer int
+uint16_t ChrgBatStrtY = 94;          /// Imagen Menu Home Animacion Bola de Charger a Bateria eje Y     Down
+uint16_t ChrgInvrtStrtX = 108;       /// Imagen Menu Home Animacion Bola de Charger a Inverter eje X    Right
+uint16_t LoadStrtX = 203;            /// Imagen Menu Home Animacion Bola de Inverter a Load eje X       Right
+uint16_t BATStrtX = 110;             /// Imagen Menu Home Animacion Bola de Bateria a Inverter eje X    Right
+uint16_t BATFinX = 150;              /// Imagen Menu Home Animacion Bola de Solar a Bateria eje X       Left
+uint16_t SolarStrtX = 210;           /// Imagen Menu Home Animacion Bola de SolarBat a Inverter eje X   Left
+uint16_t InvrtStrtY = 141;           /// Imagen Menu Home Animacion Bola de BatSolar a Inverter eje Y   UP
+uint8_t ResetMPTData=200;            /// VE.Direct Data Reset MPPT 
+uint8_t ResetIVTData=200;            /// VE.Direct Data Reset Inverter
+uint16_t TchX=0;                     /// Menu eje X Colocacion de background para el menu solicitado
+uint16_t TchY=0;                     /// Menu eje Y ...
+float CurrSens=0;                    /// Charger Current Sensr AMp Value show display buffer memoria
+float BATAmp = 0;                    /// Battery Current Negative value is amps coming out of the battery. Positive value the battery is charging
 
-String NewValueStrg="";
-float NewValue=0;
+float NewValue=0;                    /// int* 1     numerical format 
+float  NewValuedecim=0;              /// int  0.1   
+float  NewValuecentesi=0;            /// int  0.01  
+float  NewValuemilli=0;              /// int  0.001 
+float  NewValuedeca=0;               /// int  10 
+String NewValueStrg="";              /// String      text format
 
 bool AnimSolOut=false;               /// Imagen Animacion interruptor de activacion Solar Output
 bool AnimIVTOutput=false;            /// Imagen Animacion interruptor de activacion Inverter-->Load Output
@@ -449,96 +443,90 @@ bool AnimChargBat=false;             /// Imagen Animacion interruptor de activac
 bool AnimBatOut=false;               /// Imagen Animacion interruptor de activacion Bateria Output
 bool AnimBatIn=false;                /// Imagen Animacion interruptor de activacion Bateria Input
 
-unsigned long previousMillis = 0;    /// Delay          sin detencion 
-unsigned long currentMillis=0;       /// Delay          sin detencion 
-
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC,TFT_RST);  /// Display ili9341 pin IMAGEN
 XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);                         /// Display ili9341 pin TOUCH   Param 2 - Touch IRQ Pin - interrupt enabled polling
 
-void SerialIni(){
+void SerialSet(){         // initial setup serial
   Serial1.begin(UARTRate1,SERIAL_8N1,UART1rx,UART1tx);  // Serial 1 OK reasignado RX en GPIO27 D27 [ y TX en GPIO14 D14 no probado ]
   Serial2.begin(UARTRate2,SERIAL_8N1);                  // Serial 2 MPPT     ( se pueden cambiar los pines en la config esp32) 
 }
-void TextSetup(){
-  tft.setTextColor(ILI9341_WHITE);        // Mostrar "No Hay Contact"
+void PinSet(){            // initial setup pin esp32
+  pinMode(CS_PIN,OUTPUT);                                // high level Display
+  digitalWrite(CS_PIN,HIGH);                             // high level Display
+  pinMode(TFT_CS,OUTPUT);                                // Output Display
+  pinMode(CurrSensPin, INPUT);                           // Input Currrent Sensor
+  analogReadResolution(12);                              // ADC 12 Bits
 }
-void TFTSetIni(){
-  tft.begin();        // activar la imagen on rotation   se puede subir a tft.begin(40000000) para evitar parpadeos 
-  tft.setRotation(3); // 0 1 2 3 0º 90º 180º 270º
-  ts.begin();         // activar touch misma rotation que la imagen
-  ts.setRotation(3);
+void DisplaySet(){        // initial setup display
+  tft.begin();        // can be raised to tft.begin(40000000) to avoid flickering   tft.begin(40000000); 
+  tft.setRotation(3); // rotate screen  0 1 2 3  =  0º 90º 180º 270º
+  ts.begin();         // activate the touch function of the display
+  ts.setRotation(3);  // rotate screen touch should be the same as the rotated image (tft.setRotation)
 }
-void AnimSolarOut(){        /// APPV
-  tft.drawRGBBitmap(157, 146, SolarOutBitmap, SolarOut_WIDTH,SolarOut_HEIGHT);
-  tft.fillCircle(SolarStrtX, SolarStrtY, CirclRad,CirclColor); // sentido de la animacion invertida > y - en vez de < y +
+void AnimSolarOut(){      // Menu Home Animation MPPT output 
+  tft.drawRGBBitmap(SolarStrtX - (hX-1), SolarStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT);
   if(SolarStrtX>SolarFinX){
     SolarStrtX= (SolarStrtX - MovSpeed);
     }else{
     SolarStrtX=SolarStrtXDef;
   }
+  tft.fillCircle(SolarStrtX, SolarStrtY, CirclRad,CirclColor);
 }
-void AnimInverterOuput(){//
-  tft.drawRGBBitmap(188, 48, InvrtOutBitmap, InvrtOut_WIDTH,InvrtOut_HEIGHT);
-  tft.fillCircle(LoadStrtX, LoadStrtY, CirclRad,CirclColor);
+void AnimInverterOuput(){ // Menu Home Animation INVERTER output
+  tft.drawRGBBitmap(LoadStrtX - hX, LoadStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT);
   if(LoadStrtX<LoadFinX){
     LoadStrtX= (LoadStrtX + MovSpeed);
     }else{
     LoadStrtX=LoadStrtXDef;
   }
+  tft.fillCircle(LoadStrtX, LoadStrtY, CirclRad,CirclColor);
 }
-void AnimInverterInput(){//
-     tft.drawRGBBitmap(156, 87, InvrtInBitmap, InvrtIn_WIDTH,InvrtIn_HEIGHT);
-     tft.fillCircle(InvrtStrtX, InvrtStrtY, CirclRad,CirclColor);
-        if(InvrtStrtY>InvrtFinY){
-      InvrtStrtY= (InvrtStrtY - (MovSpeed * 1.9354838));
+void AnimInverterInput(){ // Menu Home Animation INVERTER input
+  tft.drawRGBBitmap(InvrtStrtX - vX, InvrtStrtY - vY, AnimRstV, AnimRstV_WIDTH,AnimRstV_HEIGHT);
+  if(InvrtStrtY>InvrtFinY){
+      InvrtStrtY= (InvrtStrtY - MovSpeed);
     }else{
       InvrtStrtY=InvrtStrtYDef;
-    }
-
+  }
+  tft.fillCircle(InvrtStrtX, InvrtStrtY, CirclRad,CirclColor);
 }
-void AnimChrgInvrt(){//
-  tft.drawRGBBitmap(94, 48, ChrgInvrtBitmap, ChrgInvrt_WIDTH,ChrgInvrt_HEIGHT);
-  tft.fillCircle(ChrgInvrtStrtX, ChrgInvrtStrtY, CirclRad,CirclColor);
+void AnimChrgInvrt(){     // Menu Home Animation CHARGER to INVERTER
+  tft.drawRGBBitmap(ChrgInvrtStrtX - hX, ChrgInvrtStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT);
   if(ChrgInvrtStrtX<ChrgInvrtFinX){
     ChrgInvrtStrtX= (ChrgInvrtStrtX + MovSpeed);
     }else{
     ChrgInvrtStrtX=ChrgInvrtStrtXDef;
   }
+  tft.fillCircle(ChrgInvrtStrtX, ChrgInvrtStrtY, CirclRad,CirclColor);
 }
-void AnimChrgBat(){//
-  tft.drawRGBBitmap(52, 78, ChrgBATBitmap, ChrgBAT_WIDTH,ChrgBAT_HEIGHT);
-  tft.fillCircle(ChrgBatStrtX, ChrgBatStrtY, CirclRad,CirclColor);
+void AnimChrgBat(){       // Menu Home Animation CHARGER to BATTERY
+  tft.drawRGBBitmap(ChrgBatStrtX - vX, ChrgBatStrtY - vY, AnimRstV, AnimRstV_WIDTH,AnimRstV_HEIGHT);
   if(ChrgBatStrtY<ChrgBatFinY){
     ChrgBatStrtY= (ChrgBatStrtY + MovSpeed);
     }else{
     ChrgBatStrtY=ChrgBatStrtYDef;
   }
+  tft.fillCircle(ChrgBatStrtX, ChrgBatStrtY, CirclRad,CirclColor);
 }
-void AnimBatOuput(){//
-  tft.drawRGBBitmap(93, 146, BATInvrtBitmap, BATInvrt_WIDTH,BATInvrt_HEIGHT);
-  tft.fillCircle(BATStrtX, BATStrtY, CirclRad,CirclColor); // charge
+void AnimBatOuput(){      // Menu Home Animation BATTERY output
+  tft.drawRGBBitmap(BATStrtX - hX, BATStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT);
   if(BATStrtX<BATFinX){
     BATStrtX= (BATStrtX + MovSpeed);
     }else{
       BATStrtX=BATStrtXDef;
   }
+  tft.fillCircle(BATStrtX, BATStrtY, CirclRad,CirclColor); // charge
 }
-void AnimBatInput(){//
-  tft.drawRGBBitmap(93, 146, BATInvrtBitmap, BATInvrt_WIDTH,BATInvrt_HEIGHT);
-  tft.fillCircle(BATFinX, BATStrtY, CirclRad,CirclColor); // discharge
-  if(BATStrtX<BATFinX){
-    BATFinX= (BATFinX - MovSpeed);
+void AnimBatInput(){      // Menu Home Animation BATTERY input  ( notes added)
+  tft.drawRGBBitmap(BATFinX - (hX-1), BATStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT); // delete the place of the previous animation blue ball
+  if(BATStrtX<BATFinX){                                    // calculate new location of the blue ball
+    BATFinX= (BATFinX - MovSpeed);                         // set how much spixel moves in each loop
     }else{
-      BATFinX=BATFinXDef;
+      BATFinX=BATFinXDef;                                  //end of the journey return from the beginning
   }
+  tft.fillCircle(BATFinX, BATStrtY, CirclRad,CirclColor);  // draw a blue ball in its new location
 }
-void TextSize1(){
-  tft.setFont(TxtSize1);
-}
-void TextSize2(){
-  tft.setFont(TxtSize2);
-}
-void ReadSerial1(){ // Inverter
+void ReadSerial1(){       // Data from VE.Direct Inverter
   if (Serial1.available()){
     Origin="Inverter";
     label= Serial1.readStringUntil('\t'); // no se pueden usar  "x" hay qu eponer 'x'
@@ -547,215 +535,243 @@ void ReadSerial1(){ // Inverter
     Origin="IVTnodata";
   }    
 }
-void ReadSerial2(){
+void ReadSerial2(){       // Data from VE.Direct MPPT
   if (Serial2.available()){
     Origin="MPPT";
-    label= Serial2.readStringUntil('\t'); // no se pueden usar  "x" hay qu eponer 'x'
+    label= Serial2.readStringUntil('\t');
     val = Serial2.readStringUntil('\n');     
     }else{  
     Origin="MPTnodata";    
   }
-}
-void CurrentSensor(){
-  NewValue = analogRead(CurrSensPin);                      // Current Sensor sumar cada valor leido      
-  NewValue = ((NewValue-CurrSensRAWZero)*CurrSensRAWUnit); // Current Sensor pasar de RAWvalue a Amp
-  if(NewValue<Zero){
-   NewValue=Zero;
+}   
+void CurrentSensor(){     // Data Charger amper calcul from Current Sensor
+  for( i = Zero; i < CurrSensAVG; i++) {          // read several times to have an average value
+    NewValue += analogRead(CurrSensPin);
+  }
+  NewValue = ( NewValue / CurrSensAVG) ;                          // RAW value for debug en calibration
+  NewValue = (( NewValue - CurrSensRAWZero ) * CurrSensRAWUnit ); // RAW to Amp
+  if(  NewValue < One ){
+   NewValue=Zero;                                                // < 1 A  Is not taken into account
   }else{}
 }
-void Touched(){          //// Touched YES
+void SetColumnLine(){     // SubMenu set cursor for print show display data
+   // extract X Y axis position from C1L1
+  int column, line;
+  sscanf(MenuCL.c_str(), "C%dL%d", &column, &line);
+  line--;                                          // start from line0
+  if (column == 1) {
+    tft.setCursor(MenuColumn1X, MenuColumn1Y + (MenuColumn1NextLine * line));
+  } else if (column == 2) {
+    tft.setCursor(MenuColumn2X, MenuColumn2Y + (MenuColumn2NextLine * line));
+  }
+}  
+void HomePrintInt(const GFXfont *fonts, uint16_t colorold, uint16_t colornew, int x, int y, float old, float renew, uint8_t decim, String unit){   // Menu Home format int
+  // font , backgrounb text color to erase, text color to write, Cursor axis X, Cursor axis Y, old value to erase, new value to write, figures after the decimal point, unit of measurement
+  tft.setFont(fonts);
+  tft.setTextColor(colorold,colorold);  // text color & text background color
+  tft.setCursor(x, y);
+  tft.print(old, decim);
+  tft.print(unit);
+  tft.setTextColor(colornew,colorold);
+  tft.setCursor(x, y);
+  tft.print(renew, decim);
+  tft.print(unit);
+}
+void HomePrintStrg(const GFXfont *fonts, uint16_t colorold, uint16_t colornew, int x, int y, String oldStrg, String renewStrg, String tag) {       // Menu Home format String
+  // font , backgrounb text color to erase, text color to write, Cursor axis X, Cursor axis Y, old value to erase, new value to write, figures after the decimal point, unit of measurement
+  tft.setFont(fonts);
+  tft.setTextColor(colorold,colorold);  // text color & text background color
+  tft.setCursor(x, y);
+  tft.print(tag);
+  tft.print(oldStrg);
+  tft.setTextColor(colornew,colorold);
+  tft.setCursor(x, y);
+  tft.print(tag);
+  tft.print(renewStrg);
+}
+void SubMenuPrintInt(const GFXfont *fonts,uint16_t colorold, uint16_t colornew, float old, float renew, uint8_t decim, String unit){               // Sub Menu format int
+  // font , backgrounb text color to erase, text color to write, SteColumnLine = Cursor axis X & Cursor axis Y, old value to erase, new value to write, figures after the decimal point, unit of measurement
+  tft.setFont(fonts);
+  tft.setTextColor(colorold,colorold);  // text color & text background color
+  SetColumnLine();
+  tft.print(old, decim);
+  tft.print(unit);
+  tft.setTextColor(colornew,colorold);
+  SetColumnLine();
+  tft.print(renew, decim);
+  tft.print(unit);
+}
+void SubMenuPrintStrg(const GFXfont *fonts, uint16_t colorold, uint16_t colornew, String oldStrg, String renewStrg, String tag){                   // Sub Menu format String
+  // font , backgrounb text color to erase, text color to write, Cursor axis X, Cursor axis Y, old value to erase, new value to write, figures after the decimal point, unit of measurement
+  tft.setFont(fonts);
+  tft.setTextColor(colorold,colorold);  // text color & text background color
+  SetColumnLine();
+  tft.print(tag);
+  tft.print(oldStrg);
+  tft.setTextColor(colornew,colorold);
+  SetColumnLine();
+  tft.print(tag);
+  tft.print(renewStrg);
+}
+void Touched(){        // Touch Touched
+    //create requested menu, set background & text, reset values, and mark requested menu as present menu
     if(MenuSelected=="Home"){
       tft.drawRGBBitmap(MenuBackgroundX, MenuBackgroundY, HomeBitmap, HOME_WIDTH,HOME_HEIGHT);  // set cursor X , y , select image, image widht, image height
-      MPTVbat=99;
-      MPTVpv=99;
-      MPTPpv=99;
-      MPTAmp=99;
-      MPTkWh=99;
-      MPTWmax=99;
-      MPTCS=99;
-      IVTVbat=99;
-      IVTMode=99;
-      IVTWarnStrg="";
-      IVTACV=99;
-      IVTACI=99;
-      IVTACS=99;
-      CurrSens=99;
-      IVTAmpIn=99;
-      BatAmp=99;
-      AnimIVTOutput=false;
-      AnimIVTInput=false;
+      HomePrintStrg(TxtSize1,TextColorGreen, TextColorWhite, IVTACIXtag,IVTACIYtag, "VA", "VA", "");
+      HomePrintStrg(TxtSize1,TextColorOrange,TextColorWhite, MPTPpvXtag, MPTPpvYtag, "W", "W", "");
+      HomePrintStrg(TxtSize1,TextColorRed,TextColorWhite, ChrgAmpXtag, ChrgAmpYtag, "A", "A", "");
+      ValueRst();
       MenuPresent="Home";
     }else if(MenuSelected=="Solar"){
       tft.drawRGBBitmap(MenuBackgroundX, MenuBackgroundY, SolarBackGround, SolarMenu_WIDTH,SolarMenu_HEIGHT);
+      ValueRst();
       MenuPresent="Solar";
     }else if(MenuSelected=="Bat"){
       tft.drawRGBBitmap(MenuBackgroundX, MenuBackgroundY, BatBackGround, BatMenu_WIDTH,BatMenu_HEIGHT);
+      ValueRst();
       MenuPresent="Bat";
     }else if(MenuSelected=="Inverter"){
       tft.drawRGBBitmap(MenuBackgroundX, MenuBackgroundY, InvrtBackGround, InvrtMenu_WIDTH,InvrtMenu_HEIGHT);
+      ValueRst();
       MenuPresent="Inverter";
     }else if(MenuSelected=="Charger"){
       tft.drawRGBBitmap(MenuBackgroundX, MenuBackgroundY, ChrgBackGround, ChrgMenu_WIDTH,ChrgMenu_HEIGHT);
+      ValueRst();
       MenuPresent="Charger";
     }else if(MenuSelected=="Load"){
       tft.drawRGBBitmap(MenuBackgroundX,MenuBackgroundY, LoadBackGround, LoadMenu_WIDTH,LoadMenu_HEIGHT);
+      ValueRst();
     MenuPresent="Load";
   }
 
 }
-void TouchAsk(){         //// Touched ?
-  if (ts.touched()) {
-    TS_Point p = ts.getPoint();
-    TchX=p.x;
-    TchY=p.y;
-  if ((TchX > TchHomeXmin && TchX < TchHomeXmax) && (TchY > TchHomeYmin && TchY < TchHomeYmax)) {
-    MenuSelected="Home";
-  }
-  else if ((TchX > TchSolarXmin && TchX < TchSolarXmax) && (TchY > TchSolarYmin &&TchY < TchSolarYmax)) {
-    MenuSelected="Solar";
-  }
-  else if ((TchX > TchBatXmin && TchX < TchBatXmax) && (TchY > TchBatYmin && TchY < TchBatYmax)) {
-    MenuSelected="Bat";
-  }
-  else if ((TchX > TchChrgXmin && TchX < TchChrgXmax) && (TchY > TchChrgYmin && TchY < TchChrgYmax)) {
-    MenuSelected="Charger";
-  }
-  else if ((TchX> TchInvrtXmin && TchX < TchInvrtXmax) && (TchY > TchInvrtYmin && TchY < TchInvrtYmax)) {
-    MenuSelected="Inverter";
-  }
-  else if ((TchX> TchLoadXmin && TchX < TchLoadXmax) && (TchY > TchLoadYmin && TchY < TchLoadYmax)) {
-    MenuSelected="Load";
-  }
-  if(MenuSelected==MenuPresent){
-    }else{ 
+void TouchAsk(){       // Touch Did I touch a button on the screen?
+  if (ts.touched()) {            // screen touched?
+    TS_Point p = ts.getPoint();  // save point
+    TchX=p.x;                    // save point axis X
+    TchY=p.y;                    // save point axis Y
+    if ((TchX > TchHomeXmin && TchX < TchHomeXmax) && (TchY > TchHomeYmin && TchY < TchHomeYmax)) {
+      MenuSelected="Home";
+    }else if ((TchX > TchSolarXmin && TchX < TchSolarXmax) && (TchY > TchSolarYmin &&TchY < TchSolarYmax)) {
+        MenuSelected="Solar";
+    } else if ((TchX > TchBatXmin && TchX < TchBatXmax) && (TchY > TchBatYmin && TchY < TchBatYmax)) {
+        MenuSelected="Bat";
+    }else if ((TchX > TchChrgXmin && TchX < TchChrgXmax) && (TchY > TchChrgYmin && TchY < TchChrgYmax)) {
+        MenuSelected="Charger";
+    }else if ((TchX> TchInvrtXmin && TchX < TchInvrtXmax) && (TchY > TchInvrtYmin && TchY < TchInvrtYmax)) {
+        MenuSelected="Inverter";
+    }else if ((TchX> TchLoadXmin && TchX < TchLoadXmax) && (TchY > TchLoadYmin && TchY < TchLoadYmax)) {
+        MenuSelected="Load";
+    }
+    if(MenuSelected!=MenuPresent){   //  if the present menu is different from the requested menu
       Touched();
     }
   }
 }
-void HomeBatLevel() {     ///// Home Battery Level     basado en Vbat desde MPPT    Copilot Asist
+void NewValueSet(){    // Data New Value Set 
+  NewValueStrg = val;                   // RAW value to String
+  NewValue = NewValueStrg.toInt();      // String to int
+  NewValuedecim=(NewValue*decimTo);     // int to  / 0.1
+  NewValuecentesi=(NewValue*centesiTo); // int to / 0.01
+  NewValuemilli=(NewValue*milliTo);     // int to / 0.001
+  NewValuedeca=(NewValue*decaTo);       // int to * 10
+}
+void HomeBatLevel() {  // Menu Home Battery Level    (from Vbat MPPT)
   if (MPTVbat < BatLevel1) {
-    tft.fillRect(BatBarLevelx, BatBarLevel0y, BatBarLevel0w, BatBarLevel0h , TextColorBlue);  // Nivel de bateria muy bajo borrar todo slo recuatros verde del nivel
+    tft.fillRect(BatBarLevelx, BatBarLevel0y, BatBarLevel0w, BatBarLevel0h, TextColorBlue);  // Nivel de bateria muy bajo borrar todo slo recuatros verde del nivel
   }
-  int levels[] = {BatLevel1, BatLevel2, BatLevel3, BatLevel4};
-  for (int i = 0; i < BatBarLevels; i++) {
-    if (MPTVbat > levels[i]) {
-      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (i * BatBarLevelNextY), BatBarLevelWidth, BatBarLevelHeight ,BatBarLevelRadius, BatBarLevelColor);  // Nivel i+1 encender recuadro verde del nivel i+1
+  if (MPTVbat > BatLevel1) {
+    tft.fillRoundRect(BatBarLevelx, BatBarLevel1y, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Nivel i+1 encender recuadro verde del nivel i+1
+  }
+  if (MPTVbat > BatLevel2) {
+    tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - BatBarLevelNextY, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Nivel i+1 encender recuadro verde del nivel i+1
+  }
+  if (MPTVbat > BatLevel3) {
+    tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 2), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Nivel i+1 encender recuadro verde del nivel i+1
+  }
+  if (MPTVbat > BatLevel4) {
+    tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 3), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Nivel i+1 encender recuadro verde del nivel i+1
+  }
+}
+void HomeCurrentS(){   // Menu Home Charger amper
+  CurrentSensor();                      // refresh read current sensor
+  if(abs(CurrSens - NewValue)>=decuTo){     //   0.5 dif 
+    if( NewValue >= Zero && NewValue < ChargerImax ){
+      HomePrintInt(TxtSize2,TextColorRed,TextColorWhite, ChrgAmpX, ChrgAmpY, CurrSens, NewValue, One , "");
+      CurrSens=NewValue;         
     }
   }
-
 }
-void HomeCurrentS(){                    ///// Home Currenst Sensor Charger
-  CurrentSensor();                      // actualizar lectura del sensor de corrienteo
-  if(abs(CurrSens - NewValue) < 1){     ///// Charger Current Sensor mismo valor 
-  }else{                                ///// Yes no hace nada
-    TextSize2();                        ///// No es igual, es necesario borrar y escribir el valor nuevo
-    tft.setTextColor(TextColorRed);     ///// Escribir del mismo color que el fondo
-    tft.setCursor(ChrgAmpX, ChrgAmpY);  ///// Cursor
-    tft.print(CurrSens,0);              ///// B0rrar Current Sensor valor anterior
-    tft.print("A");                     ///// Borrar Letra A
-    tft.setTextColor(TextColorWhite);    ///// Escribir en blanco
-    tft.setCursor(ChrgAmpX, ChrgAmpY);  ///// Cursor
-    tft.print(NewValue,0);              ///// Escribir Nuevo valor
-    tft.print("A");                     ///// Escribir Letra A
-    CurrSens=NewValue;             ///// Establecer el nuevo valor con valor antiguo para la proxima verificacion
-  }
-  NewValue=Zero;                        ///// Resetear NewValue
-}
-void HomeIVtAmpIn(){            ///// Home Amp input Inverter Estimado
-  NewValue=((IVTACS / IVTVbat)*IVTAmpInLoss); // Amp inpout estimado con perdida estimada
-    if(NewValue==IVTAmpIn){
-    }else{
-        TextSize1();
-        tft.setTextColor(TextColorBlue);
-        tft.setCursor(IVTAmpInX, IVTAmpInY);  // Mostrar valor en pantalla Watt
-        tft.print(IVTAmpIn,1);
-        tft.print("A");
-        tft.setTextColor(TextColorWhite);
-        tft.setCursor(IVTAmpInX, IVTAmpInY);  // Mostrar valor en pantalla Watt
-        tft.print(NewValue,1);
-        tft.print("A");
+void HomeIVtAmpIn(){   // Menu Home Inverter amper calcul  (VA is not Watt but close to be able to estimate Amper )
+  NewValue=((IVTACS / IVTVbat)*InverterLossmin);  // loss inverter add
+    if(abs(IVTAmpIn - NewValue)>=decimTo){   // 0.1 dif
+      if( NewValue > Zero && NewValue < InverterIbatmax ){
+        HomePrintInt(TxtSize1,TextColorBlue,TextColorWhite, IVTAmpInX, IVTAmpInY, IVTAmpIn, NewValue, One , "A");
         IVTAmpIn=NewValue;
+      }
     }
-  NewValue=Zero;
 }
-void HomeBatAmp(){
-  NewValue=(CurrSens+MPTAmp);
-  NewValue=(NewValue-IVTAmpIn);
-        if(NewValue==BatAmp){
-        }else{
-        TextSize1();
-        tft.setTextColor(TextColorWhite);
-        tft.setCursor(BatAmpX, BatAmpY);  // Mostrar valor en pantalla Watt
-        tft.print(BatAmp,1);
-        tft.print("A");
-        if(NewValue<0){
-          tft.setTextColor(TextColorOrange);
-        }else{
-          tft.setTextColor(TextColorBlue);
-        }
-        tft.setCursor(BatAmpX, BatAmpY);  // Mostrar valor en pantalla Watt
-        tft.print(NewValue,1);
-        tft.print("A");
-        BatAmp=NewValue;
-      } 
-  NewValue=Zero;
-}
-void HomeAnimAsk(){             //  Copilot Asist ayuda
-  AnimSolOut = MPTPpv > 0.5 ? true : false;
-  AnimIVTOutput = IVTACS > 1 ? true : false;
-
-  if(BatAmp>0){
-      AnimBatIn=true;
-      AnimBatOut=false;
-  }else if(BatAmp<0){
-      AnimBatIn=false;
-      AnimBatOut=true;
-  }else if(BatAmp==0){
-      AnimBatIn=false;
-      AnimBatOut=false;
+void HomeBatAmp(){     // Menu Home Battery amper calcul
+  NewValue= (CurrSens+MPTAmp)-IVTAmpIn;
+  if( abs(BATAmp - NewValue)>=decuTo){  // 0.5 dif
+    HomePrintInt(TxtSize1,TextColorBlue,TextColorWhite, BATAmpX, BATAmpY, BATAmp, NewValue, One , "A");  
+    BATAmp=NewValue;
   }
+}
+void HomeAnimAsk(){    // Menu Home Animation ask
+  AnimSolOut     = MPTPpv  > One;
+  AnimIVTOutput  = IVTACS  > One;
+  AnimBatIn      = BATAmp  > Zero;
+  AnimBatOut     = BATAmp  < Zero;
+  AnimChargBat   = CurrSens > Zero;
+  AnimChargIVT   = CurrSens > Zero;
+  AnimIVTInput   = IVTAmpIn > Zero;
 
-  if(CurrSens>0){
+  if(MPTPpv<One){
+    AnimSolOut=false;
+    AnimBatIn=false;
     if(CurrSens>IVTAmpIn){
-      AnimChargBat=true;
-      }else{
-        if(MPTAmp>IVTAmpIn){
-          AnimChargBat=true;
-        }else{
-          AnimChargBat=false;
-        }
-      }
-    }else{
-    AnimChargBat=false;
+     AnimIVTInput=false;
+    }
+    if(CurrSens<IVTAmpIn){
+     AnimChargBat=false;
+    }
   }
-  
-  if(IVTAmpIn>CurrSens){
-      AnimIVTInput=true;
-    }else{   
-    AnimIVTInput=false;
-  }
-
-  if (CurrSens>0){
-    if(IVTAmpIn>MPTAmp){ 
-      AnimChargIVT=true;
-    }else{
-    AnimChargIVT=false;
+  if(MPTPpv>One){
+    if(MPTPpv>IVTAmpIn){
+      AnimBatOut=false;
+      AnimBatIn=true;
     }
   }
 
-  if(CurrSens>0){
-    if(MPTAmp>IVTAmpIn){
-        AnimChargBat=true;
-    }else{
-      if(IVTAmpIn<CurrSens){
-        AnimChargBat=true;
-      }else{
-        AnimChargBat=false;
-      }
-    }
+  if(MPTAmp<IVTAmpIn && CurrSens<One){
+    AnimBatOut=true;
+    AnimBatIn=false;
+  }
+
+  if(AnimSolOut==false){
+    tft.drawRGBBitmap(SolarStrtX - (hX-1), SolarStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT);
+  } 
+  if(AnimIVTOutput==false){
+      tft.drawRGBBitmap(LoadStrtX - hX, LoadStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT);
+  }
+  if(AnimIVTInput==false){
+    tft.drawRGBBitmap(InvrtStrtX - vX, InvrtStrtY - vY, AnimRstV, AnimRstV_WIDTH,AnimRstV_HEIGHT);  
+  }
+  if(AnimChargIVT==false){  
+    tft.drawRGBBitmap(ChrgInvrtStrtX - hX, ChrgInvrtStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT);
+  }
+  if(AnimChargBat==false){
+    tft.drawRGBBitmap(ChrgBatStrtX - vX, ChrgBatStrtY - vY, AnimRstV, AnimRstV_WIDTH,AnimRstV_HEIGHT);
+  }
+  if(AnimBatIn==false){  
+    tft.drawRGBBitmap(BATStrtX - hX, BATStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT);
+  }
+  if(AnimBatOut==false){
+    tft.drawRGBBitmap(BATFinX - (hX-1), BATStrtY - hY, AnimRstH, AnimRstH_WIDTH,AnimRstH_HEIGHT);
   }
 }
-void HomeAnimSwitch(){          ///// Home Animaciones interruptores
+void HomeAnimSwitch(){ // Menu Home Animation Switchs
   if(AnimSolOut==true){
     AnimSolarOut();
   }
@@ -778,197 +794,121 @@ void HomeAnimSwitch(){          ///// Home Animaciones interruptores
     AnimBatInput();
   }
 }
-void DataResetMPT(){   
-  AnimSolOut=false;
-  Touched();
-  ResetMPTData=ResetLoopDefault;  // dato recibido correctamente no resetar los datos
+void ValueRst(){       // Data Value Reset
+  MPTVbat =0;
+  MPTPpv =0;
+  MPTVpv =0;
+  MPTAmp =0;
+  MPTkWh =0;
+  MPTWmax =0;
+  MPTCS =0;
+  IVTVbat =0;
+  IVTMode =0;
+  IVTACV =0;
+  IVTACI =0;
+  IVTACS =0;
+  CurrSens =0;
+  IVTAmpIn =0;
+  BATAmp =0;
+  IVTWarnStrgmsg="";
+  MPTfwStrg="";
+  MPTkWhHist=0;
+  MPTpidStrg="";
+  MPTSERStrg="";
+  MPTErrorStrgmsg="";
+  MPTCSStrgmsg="";
+  MPTkWhAyer=0;
+  MPTWmaxAyer=0;
+  IVTSERStrg="";
+  IVTpidStrg="";
+  IVTfwStrg="";
+  IVTCSStrgmsg="";
+  IVTARStrgmsg="";
 }
-void DataResetIVT(){
+void DataResetMPT(){   // Data error reset data
   Touched();
-  ResetIVTData=ResetLoopDefault;  // dato recibido correctamente no resetar los datos
+  ResetMPTData=ResetLoopDefault;  // correct data received, wrong data counter reset
+}   
+void DataResetIVT(){   // Data error reset data 
+  Touched();
+  ResetIVTData=ResetLoopDefault;  // correct data received, wrong data counter reset
 }
-void Home(){            ////
+void Home(){           // Menu Home
   ReadSerial2();
-  if(Origin=="MPTnodata"){
+  if(Origin=="MPTnodata"){                                                  // turn on counter wrong data counter reset
     ResetMPTData-=1;
     if(ResetMPTData<1){
       DataResetMPT();  
     }
   }
   if(Origin=="MPPT"){
-    ResetMPTData=ResetLoopDefault;  // dato recibido correctamente no resetar los datos
-    if(label == "V"){         // Battery Volt  mV     // Bateria Indicador de Nivel 
-      NewValueStrg=val;
-      NewValue=NewValueStrg.toInt();
-      NewValue=(NewValue*milliTo);
-      if(NewValue==MPTVbat){
-        }else{
-        TextSize1();
-        tft.setTextColor(TextColorOrange);
-        tft.setCursor(MPTVbatX, MPTVbatY);  // Mostrar valor en pantalla Watt
-        tft.print(MPTVbat,1);
-        tft.print("V");
-        tft.setTextColor(TextColorWhite);
-        tft.setCursor(MPTVbatX, MPTVbatY);  // Mostrar valor en pantalla Watt
-        tft.print(NewValue,1);
-        tft.print("V");
-        MPTVbat=NewValue;
+  NewValueSet();
+    ResetMPTData=ResetLoopDefault;                                          // correct data received, wrong data counter reset
+    if(label == "V" && abs(MPTVbat - NewValuemilli)>=decimTo){              // Battery Volt  mV   
+      if( NewValuemilli > InverterVbatmin && NewValuemilli < InverterVbatmax ){           // Outside this range the inverter does not work
+        HomePrintInt(TxtSize1,TextColorOrange,TextColorWhite, MPTVbatX, MPTVbatY, MPTVbat, NewValuemilli, One , "V");
+        MPTVbat=NewValuemilli;
+        HomeBatLevel(); // Calculo del % de bateri
       }
-      NewValue=Zero;
-    HomeBatLevel(); // Calculo del % de bateri 
-    }
-    else if(label == "VPV"){  //Panel Volt mV
-      NewValueStrg=val;
-      NewValue=NewValueStrg.toInt();
-      if(NewValue<Zero){
-        NewValue=Zero; 
+    }else if(label == "VPV" && abs(MPTVpv - NewValuemilli) >= decimTo){     //Volt PV
+      if( NewValuemilli >= Zero && NewValuemilli < MPPTVmax ){
+        HomePrintInt(TxtSize1,TextColorOrange,TextColorWhite, MPTVpvX, MPTVpvY, MPTVpv, NewValuemilli, Zero , "V");
+        MPTVpv=NewValuemilli;
       }
-      NewValue=(NewValue*milliTo);
-      if(abs(MPTVpv - NewValue) < 1){
-      }else{
-        TextSize1();
-        tft.setTextColor(TextColorOrange);
-        tft.setCursor(MPTVpvX, MPTVpvY);  // Mostrar valor en pantalla Watt
-        tft.print(MPTVpv,0);
-        tft.print("V");
-        tft.setTextColor(TextColorWhite);
-        tft.setCursor(MPTVpvX, MPTVpvY);  // Mostrar valor en pantalla Watt
-        tft.print(NewValue,0);
-        tft.print("V");
-        MPTVpv=NewValue;
-      }
-     NewValue=Zero;
-    }
-    else if(label == "PPV"){  // Panel Power W
-      NewValueStrg=val;
-      NewValue=NewValueStrg.toInt();
-      if(NewValue==MPTPpv){
-      }else{
-        TextSize2();
-        tft.setTextColor(TextColorOrange);
-        tft.setCursor(MPTPpvX, MPTPpvY);  // Mostrar valor en pantalla Watt
-        tft.print(MPTPpv,0);
-        tft.print("W");        tft.setTextColor(TextColorWhite);
-        tft.setCursor(MPTPpvX, MPTPpvY);  // Mostrar valor en pantalla Watt
-        tft.print(NewValue,0);
-        tft.print("W");
+    }else if(label == "PPV" && abs(MPTPpv - NewValue )>=One){               // Watt PV
+      if( NewValue >= Zero && NewValue < MPPTWmax ){
+        HomePrintInt(TxtSize2,TextColorOrange,TextColorWhite, MPTPpvX, MPTPpvY, MPTPpv, NewValue, Zero , "");
         MPTPpv=NewValue;
       }
-     NewValue=Zero;
-    }
-    else if(label == "I"){    // mA Battery mA
-      NewValueStrg=val;
-      NewValue=NewValueStrg.toInt();
-      NewValue=(NewValue*milliTo);
-      if(NewValue==MPTAmp){
-      }else{
-        TextSize1();
-        tft.setTextColor(TextColorOrange);
-        tft.setCursor(MPTAmpX, MPTAmpY);  // Mostrar valor en pantalla Watt
-        tft.print(MPTAmp,1);
-        tft.print("A");
-        tft.setTextColor(TextColorWhite);
-        tft.setCursor(MPTAmpX, MPTAmpY);  // Mostrar valor en pantalla Watt
-        tft.print(NewValue,1);
-        tft.print("A");
-        MPTAmp=NewValue;
+    }else if(label == "I" && abs(MPTAmp - NewValuemilli)>=decuTo){          // I PV
+      if( NewValuemilli >= Zero && NewValuemilli < MPPTAmax ){
+        HomePrintInt(TxtSize1,TextColorOrange,TextColorWhite, MPTAmpX, MPTAmpY, MPTAmp, NewValuemilli, One , "A");
+        MPTAmp=NewValuemilli;
       }
-     NewValue=Zero;
-    }
-    else if(label == "H20"){  // 0.01kWh HOY
-      NewValueStrg=val;
-      NewValue=NewValueStrg.toInt();
-      if(NewValue==MPTkWh){
-      }else{
-        TextSize1();
-        tft.setTextColor(TextColorOrange);
-        tft.setCursor(MPTkWhX, MPTkWhY);  // Mostrar valor en pantalla Watt
-        tft.print(MPTkWh,0);
-        tft.print("kWh");  
-        tft.setTextColor(TextColorWhite);
-        tft.setCursor(MPTkWhX, MPTkWhY);  // Mostrar valor en pantalla Watt
-        tft.print(NewValue,0);
-        tft.print("kWh");
-        MPTkWh=NewValue;
+    }else if(label == "H20" && abs(MPTkWh-NewValuedeca)>=One){              // kWh
+      if( NewValuedeca >= Zero && NewValuedeca < MPPTWmax*DayHr ){  // Wmax * 24h one day
+        HomePrintInt(TxtSize1,TextColorOrange,TextColorWhite,MPTkWhX, MPTkWhY, MPTkWh, NewValuedeca, Zero , "Wh");
+        MPTkWh=NewValuedeca;
       }
-     NewValue=Zero;
-    }
-    else if(label == "H21"){ // Wmax HOY
-      NewValueStrg=val;
-      NewValue=NewValueStrg.toInt();
-      if(NewValue==MPTWmax){
-      }else{
-        TextSize1();
-        tft.setTextColor(TextColorOrange);
-        tft.setCursor(MPTWmaxX, MPTWmaxY);  // Mostrar valor en pantalla Watt
-        tft.print(MPTWmax,0);
-        tft.print("Wmax");
-        tft.setTextColor(TextColorWhite);
-        tft.setCursor(MPTWmaxX,MPTWmaxY);  // Mostrar valor en pantalla Watt
-        tft.print(NewValue,0);
-        tft.print("Wmax");
+    }else if(label == "H21" && abs(MPTWmax-NewValue)>=One){                 // Wmax 
+      if( NewValue >= Zero && NewValue < MPPTWmax ){
+        HomePrintInt(TxtSize1,TextColorOrange,TextColorWhite,MPTWmaxX, MPTWmaxY, MPTWmax, NewValue, Zero , "Wmax");
         MPTWmax=NewValue;
       }
-      NewValue=Zero;
-    }
-    else if(label == "CS"){ // Estado operativo
-      NewValueStrg=val;
-      NewValue=NewValueStrg.toInt();
-      if(NewValue==MPTCS){
-      }else{
+    }else if(label == "CS" && NewValue!= MPTCS){                            // State
+      if( NewValue >= Zero && NewValue <= 5 ){
         if(NewValue==0){ // OFF
          tft.fillCircle(LedMPPTX, LedMPPTY, LedRad,ILI9341_BLACK);
-        }
-        else if(NewValue==2){ // FAULT MPPT & Inverter off hasta hacer Reset
+        }else if(NewValue==2){ // FAULT MPPT & Inverter off hasta hacer Reset
           tft.fillCircle(LedMPPTX, LedMPPTY, LedRad,ILI9341_RED);
-        } 
-        else if(NewValue==3){ // bulk
+        }else if(NewValue==3){ // bulk
           tft.fillCircle(LedMPPTX, LedMPPTY, LedRad,ILI9341_BLUE);
-        }
-        else if(NewValue==4){ // Absorption
+        }else if(NewValue==4){ // Absorption
           tft.fillCircle(LedMPPTX, LedMPPTY, LedRad,ILI9341_YELLOW);
-        }
-        else if(NewValue==5){ // Float
+        }else if(NewValue==5){ // Float
           tft.fillCircle(LedMPPTX, LedMPPTY, LedRad,ILI9341_GREEN);
         }
-      MPTCS=NewValue;
       }
-     NewValue=Zero;
+      MPTCS=NewValue;
     }
   }
-  ReadSerial1();  // AR (es como WARM) , CS (es como MODE),
-  if(Origin=="IVTnodata"){
-    ResetIVTData=(ResetIVTData-1);
-    if(ResetIVTData<1){
+  ReadSerial1();  
+  if(Origin=="IVTnodata"){                                                   // turn on counter wrong data counter reset
+    ResetIVTData=(ResetIVTData-One);
+    if(ResetIVTData<One){
       DataResetIVT();  
-    }else{}
+    }
   }
   if(Origin=="Inverter"){
-    ResetIVTData=ResetLoopDefault;  // dato recibido correctamente no resetar los datos
-    if(label == "V"){         // Battery Volt  mV     NO ANIM
-      NewValueStrg=val;
-      NewValue=NewValueStrg.toInt();
-      NewValue=(NewValue*milliTo);
-      if(IVTVbat==NewValue){
-        }else{
-        TextSize1();
-        tft.setTextColor(TextColorBlue);
-        tft.setCursor(IVTVbatX, IVTVbatY);  // Mostrar valor en pantalla Watt
-        tft.print(IVTVbat,1);
-        tft.print("V");
-        tft.setTextColor(TextColorWhite);
-        tft.setCursor(IVTVbatX, IVTVbatY);  // Mostrar valor en pantalla Watt
-        tft.print(NewValue,1);
-        tft.print("V");
-        IVTVbat=NewValue;
+  NewValueSet();
+    ResetIVTData=ResetLoopDefault;                                           // correct data received, wrong data counter reset
+    if(label == "V" && abs(IVTVbat- NewValuemilli)>=decimTo){                // Battery Volt  
+      if( NewValuemilli > InverterVbatmin && NewValuemilli < InverterVbatmax ){
+        HomePrintInt(TxtSize1,TextColorBlue,TextColorWhite,IVTVbatX, IVTVbatY, IVTVbat, NewValuemilli, One , "V");          
+        IVTVbat=NewValuemilli;
       }
-      NewValue=Zero;   
-    }
-    else if(label=="MODE"){  // INverter Modo ON OFF ECO
-      NewValueStrg=val;
-      NewValue=NewValueStrg.toInt();
-      if(IVTMode==NewValue){
-        }else{
+    }else if(label=="MODE" && NewValue != IVTMode) {                         // Mode
+      if( NewValue >= 2 && NewValue <= 5 ){
           if(NewValue==2){ // inverter ON
             tft.fillCircle(LedIVTX, LedIVTY, LedRad,ILI9341_GREEN);
           }
@@ -980,594 +920,307 @@ void Home(){            ////
           }
         IVTMode=NewValue;  
       }
-      NewValue=Zero;
-    }
-    else if(label=="WARN"){    // INVERTER Alarm Razon
-      NewValueStrg=val;
-      if(NewValueStrg==IVTWarnStrg){
-        }else{
+    }else if(label=="WARN" && NewValueStrg != IVTWarnStrgmsg ){              // Warm
+      if( NewValueStrg=="1" || NewValueStrg=="2" || NewValueStrg=="32"|| NewValueStrg=="64" || NewValueStrg=="256" || NewValueStrg=="512" || NewValueStrg=="1024" || NewValueStrg=="248"){
           if(NewValueStrg=="1"){ // volta bajo
             NewValueStrg=Warm1;
             tft.fillCircle(LedIVTX, LedIVTY, LedRad,ILI9341_RED);
-            TextSize1();
-            tft.setTextColor(TextColorWhite);
-            tft.setCursor(IVTWarnX, IVTWarnY);  // 
-            tft.print(IVTWarnStrg);
-            tft.setTextColor(TextColorRed);
-            tft.setCursor(IVTWarnX,IVTWarnY);  //
-            tft.print(NewValueStrg);
+            HomePrintStrg(TxtSize1,TextColorWhite, TextColorRed, IVTWarnX,IVTWarnY, IVTWarnStrgmsg, NewValueStrg, "");
           }
           else if(NewValueStrg=="2"){ //Volt alto
             NewValueStrg=Warm2;
             tft.fillCircle(LedIVTX, LedIVTY, LedRad,ILI9341_RED);
-            TextSize1();
-            tft.setTextColor(TextColorWhite);
-            tft.setCursor(IVTWarnX, IVTWarnY);  // 
-            tft.print(IVTWarnStrg);
-            tft.setTextColor(TextColorRed);
-            tft.setCursor(IVTWarnX,IVTWarnY);  // 
-            tft.print(NewValueStrg);
+            HomePrintStrg(TxtSize1,TextColorWhite, TextColorRed, IVTWarnX,IVTWarnY, IVTWarnStrgmsg ,NewValueStrg, "");
           }
           else if(NewValueStrg=="32"){ // Temperatura baja
             NewValueStrg=Warm32;
             tft.fillCircle(LedIVTX, LedIVTY, LedRad,ILI9341_RED);
-            TextSize1();
-            tft.setTextColor(TextColorWhite);
-            tft.setCursor(IVTWarnX, IVTWarnY);  
-            tft.print(IVTWarnStrg);
-            tft.setTextColor(TextColorRed);
-            tft.setCursor(IVTWarnX,IVTWarnY);  
-            tft.print(NewValueStrg);
+            HomePrintStrg(TxtSize1,TextColorWhite, TextColorRed, IVTWarnX,IVTWarnY, IVTWarnStrgmsg ,NewValueStrg, "");
           }
           else if(NewValueStrg=="64"){ // Temperatura alta
             NewValueStrg=Warm64;
             tft.fillCircle(LedIVTX, LedIVTY, LedRad,ILI9341_RED);
-            TextSize1();
-            tft.setTextColor(TextColorWhite);
-            tft.setCursor(IVTWarnX, IVTWarnY);  
-            tft.print(IVTWarnStrg);
-            tft.setTextColor(TextColorRed);
-            tft.setCursor(IVTWarnX,IVTWarnY);  
-            tft.print(NewValueStrg);
+            HomePrintStrg(TxtSize1,TextColorWhite, TextColorRed, IVTWarnX,IVTWarnY, IVTWarnStrgmsg, NewValueStrg, "");
           }
           else if(NewValueStrg=="256"){ // Sobrecarca se load demasiado alto
             NewValueStrg=Warm256;
             tft.fillCircle(LedIVTX, LedIVTY, LedRad,ILI9341_RED);
-            TextSize1();
-            tft.setTextColor(TextColorWhite);
-            tft.setCursor(IVTWarnX, IVTWarnY);  
-            tft.print(IVTWarnStrg); 
-            tft.setTextColor(TextColorRed);
-            tft.setCursor(IVTWarnX,IVTWarnY);  
-            tft.print(NewValueStrg);
+            HomePrintStrg(TxtSize1,TextColorWhite, TextColorRed, IVTWarnX,IVTWarnY, IVTWarnStrgmsg ,NewValueStrg, "");
           }
           else if(NewValueStrg=="512"){ // rizado de volt continuos de la batteria ruido
             NewValueStrg=Warm512;
             tft.fillCircle(LedIVTX, LedIVTY, LedRad,ILI9341_RED);
-            TextSize1();
-            tft.setTextColor(TextColorWhite);
-            tft.setCursor(IVTWarnX, IVTWarnY);  
-            tft.print(IVTWarnStrg);
-            tft.setTextColor(TextColorRed);
-            tft.setCursor(IVTWarnX,IVTWarnY);  
-            tft.print(NewValueStrg);
+            HomePrintStrg(TxtSize1,TextColorWhite, TextColorRed, IVTWarnX,IVTWarnY, IVTWarnStrgmsg ,NewValueStrg, "");
           }
           else if(NewValueStrg=="1024"){ // AC Volt demasiado bajo
             NewValueStrg=Warm1024;
             tft.fillCircle(LedIVTX, LedIVTY, LedRad,ILI9341_RED);
-            TextSize1();
-            tft.setTextColor(TextColorWhite);
-            tft.setCursor(IVTWarnX, IVTWarnY);  
-            tft.print(IVTWarnStrg);
-            tft.setTextColor(TextColorRed);
-            tft.setCursor(IVTWarnX,IVTWarnY);  
-            tft.print(NewValueStrg);
+            HomePrintStrg(TxtSize1,TextColorWhite, TextColorRed, IVTWarnX,IVTWarnY, IVTWarnStrgmsg, NewValueStrg, "");
           }
           else if(NewValueStrg=="2048"){ // AC volt demasiado alto
             NewValueStrg=Warm2048;
             tft.fillCircle(LedIVTX, LedIVTY, LedRad,ILI9341_RED);
-            TextSize1();
-            tft.setTextColor(TextColorWhite);
-            tft.setCursor(IVTWarnX, IVTWarnY);  
-            tft.print(IVTWarnStrg);
-            tft.setTextColor(TextColorRed);
-            tft.setCursor(IVTWarnX,IVTWarnY);  
-            tft.print(NewValueStrg);
+            HomePrintStrg(TxtSize1,TextColorWhite, TextColorRed, IVTWarnX,IVTWarnY, IVTWarnStrgmsg ,NewValueStrg, "");
           }
-          NewValueStrg=IVTWarnStrg;
-        }
-       NewValue=Zero;
-    }
-    else if(label=="AC_OUT_V"){  // AC volt 0.01V
-        NewValueStrg=val;
-        NewValue=NewValueStrg.toInt();
-        NewValue=(NewValue*centesiTo);
-        if(NewValue==IVTACV){
-          }else{
-          TextSize1();
-          tft.setTextColor(TextColorBlue);
-          tft.setCursor(IVTACVX, IVTACVY);  // Mostrar valor en pantalla Watt
-          tft.print(IVTACV,0);
-          tft.print("V");
-          tft.setTextColor(TextColorWhite);
-          tft.setCursor(IVTACVX, IVTACVY);  // Mostrar valor en pantalla Watt
-          tft.print(NewValue,0);
-          tft.print("V");
-          IVTACV=NewValue;
-          }
-       NewValue=Zero;
-    }
-    else if(label=="AC_OUT_I"){ // AC amp 0.1A
-        NewValueStrg=val;
-        NewValue=NewValueStrg.toInt();
-        NewValue=(NewValue*decimTo);
-        if(NewValue==IVTACI){
-        }else{
-          TextSize1();
-          tft.setTextColor(TextColorGreen);
-          tft.setCursor(IVTACIX, IVTACIY);  // Mostrar valor en pantalla Watt
-          tft.print(IVTACI,1);
-          tft.print("A");
-          tft.setTextColor(TextColorWhite);
-          tft.setCursor(IVTACIX, IVTACIY);  // Mostrar valor en pantalla WattCS
-          tft.print(NewValue,1);
-          tft.print("A");
-          IVTACI=NewValue;
-          }
-        NewValue=Zero;
-    }
-    else if(label=="AC_OUT_S"){ // AC VA aproxi Watt
-        NewValueStrg=val;
-        NewValue=NewValueStrg.toInt();//decimTo
-        if(NewValue==IVTACS){
-        }else{
-          TextSize2();
-          tft.setTextColor(TextColorGreen);
-          tft.setCursor(IVTACWX, IVTACWY);  // Mostrar valor en pantalla Watt
-          tft.print(IVTACS,0);
-          tft.print("W"); // VA = "aproximadamente" Watt en AC
-          tft.setTextColor(TextColorWhite);
-          tft.setCursor(IVTACWX, IVTACWY);  // Mostrar valor en pantalla Watt
-          tft.print(NewValue,0);
-          tft.print("W");  // VA = "aproximadamente" Watt en AC
+      }                
+      IVTWarnStrgmsg=NewValueStrg;
+    }else if(label=="AC_OUT_V" && abs(IVTACV - NewValuecentesi)>=One) {      // V ac
+      if( NewValuecentesi > InverterVacmin && NewValuecentesi < InverterVacmax ){
+        HomePrintInt(TxtSize1,TextColorBlue,TextColorWhite,IVTACVX, IVTACVY, IVTACV, NewValuecentesi, Zero , "V");                
+        IVTACV=NewValuecentesi;
+      }
+    }else if(label=="AC_OUT_I" && abs(IVTACI - NewValuedecim)>=decimTo){     // I ac
+      if( NewValuedecim >= Zero && NewValuedecim <  InverterIbatmax ){
+        HomePrintInt(TxtSize1,TextColorGreen,TextColorWhite,IVTACIX, IVTACIY,IVTACI, NewValuedecim, One , "A");   
+        IVTACI=NewValuedecim;
+      }
+    }else if(label=="AC_OUT_S" && abs(IVTACS - NewValue)>=One){              // VA
+      if( NewValue >= Zero && NewValue <  InverterWmax ){
+        HomePrintInt(TxtSize2,TextColorGreen,TextColorWhite,IVTACWX, IVTACWY,IVTACS, NewValue, Zero , "");   
         IVTACS=NewValue;
-        }
-       NewValue=Zero;
+      }
     }
   }
-  HomeCurrentS();
-  HomeIVtAmpIn();  // Calcul deAmp input estimado del inverter
-  HomeBatAmp();
-  HomeAnimAsk();
-  HomeAnimSwitch();     // Activar animaciones si es necesario
+  HomeCurrentS();      // Amps measured by current sensor placed on the load
+  HomeIVtAmpIn();      // Calcul deAmp input estimado del inverter
+  HomeBatAmp();        // Estimated battery amps are negative for outgoing and positive for charging.
+  HomeAnimAsk();       // Verify which animations should be activated
+  HomeAnimSwitch();    // Activate required animations
 }
-void Solar(){          ///
+void Solar(){          // SubMenu Solar
   ReadSerial2();
-  TextSize1();
-  tft.setTextColor(MenuTxtColorRst);
-  if(Origin=="MPPT"){
-    if(label == "V"){             // Columna1 Linea1 Battery Volt  mV     NO ANIM
-      MenuCL=MPTVbatCL; SetColumnLine();
-      tft.print(MPTVbat,2);
-      tft.print("V");
-      MPTVbatStrg=val;
-      MPTVbat=MPTVbatStrg.toInt(); 
-      MPTVbat=(MPTVbat*milliTo);
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTVbatCL; SetColumnLine();
-      tft.print(MPTVbat,2);
-      tft.print("V");
-    }
-    else if(label == "VPV"){      // Columna1 Linea2 Panel Volt mV
-      MenuCL=MPTVpvCL; SetColumnLine();
-        tft.print(MPTVpv,0);
-        tft.print("V");
-        MPTVpvStrg=val;
-        MPTVpv=MPTVpvStrg.toInt();
-          if(MPTVpv<0){
-            MPTVpv=(MPTVpv*-1); // no se porque a veces el valor sale negativo supongo que al pasar de sting a int lo hace no siempre bien
-          }else{}
-        MPTVpv=(MPTVpv*milliTo);
-        tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTVpvCL; SetColumnLine();
-        tft.print(MPTVpv,0);
-        tft.print("V");
-    }
-    else if(label == "PPV"){      // Columna1 Linea3 Panel Power W
-      MenuCL=MPTPpvCL; SetColumnLine();
-        tft.print(MPTPpv);
-        tft.print("W");
-        MPTPpvStrg=val;
-        MPTPpv=MPTPpvStrg.toInt();
-          if(MPTPpv>1){
-            AnimSolOut=true;
-          }else{
-            AnimSolOut=false;
-          }
-        tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTPpvCL; SetColumnLine();
-        tft.print(MPTPpv);
-        tft.print("W");
-    }
-    else if(label == "I"){        // Columna1 Linea4 mA Battery mA
-      MenuCL=MPTiCL; SetColumnLine();
-        tft.print(MPTAmp);
-        tft.print("A");
-        MPTAmpStrg=val;
-        MPTAmp=MPTAmpStrg.toInt();
-        MPTAmp=(MPTAmp*milliTo);
-        tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTiCL; SetColumnLine();
-        tft.print(MPTAmp);
-        tft.print("A");
-    }
-    else if(label == "H19"){      // Columna1 Linea5 0.01kWh historic
-      MenuCL=MPTkWhHistCL; SetColumnLine();
-        tft.print(MPTkWhHist,0);
-        tft.print(MenuSolarMPTkWhHisttag);
-        MPTkWhHistStrg=val;
-        MPTkWhHist=MPTkWhHistStrg.toInt();
-        MPTkWhHist=((MPTkWhHist*centesiTo)+MPTkWhHistAdd); // 0.01kWh   
-        tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTkWhHistCL; SetColumnLine();
-        tft.print(MPTkWhHist,0);
-        tft.print(MenuSolarMPTkWhHisttag);
-    }
-    else if(label == "H20"){      // Columna1 Linea6 0.01kWh HOY
-      MenuCL=MPTkWhCL; SetColumnLine();
-        tft.print(MPTkWh,0);
-        tft.print("kWh");
-        MPTkWhStrg=val;
-        MPTkWh=MPTkWhStrg.toInt();
-        MPTkWh=(MPTkWh*centesiTo); // 0.01kWh   
-        tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTkWhCL; SetColumnLine();
-        tft.print(MPTkWh,0);
-        tft.print("kWh");
-    }
-    else if(label == "H21"){     // Columna1 Linea7 Wmax HOY
-      MenuCL=MPTWmaxCL; SetColumnLine();
-        tft.print(MPTWmax);
-        tft.print("Wmax");
-        MPTWmaxStrg=val;
-        MPTWmax=MPTWmaxStrg.toInt();
-        tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTWmaxCL; SetColumnLine();
-        tft.print(MPTWmax);
-        tft.print("Wmax");
-    }
-    else if(label == "FW"){     /// Columna2 Linea2 Firmware
-      MenuCL=MPTfwCL; SetColumnLine();
-        tft.print(MenuSolarMPTfwtag);
-        tft.print(MPTfwStrg);
-        MPTfwStrg=val;
-        tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTfwCL; SetColumnLine();
-        tft.print(MenuSolarMPTfwtag);  
-        tft.print(MPTfwStrg);
-    }
-    else if(label == "PID"){    /// Columna2 Linea3 Product ID
-      MenuCL=MPTpidCL; SetColumnLine();
-        tft.print(MenuSolarMPTpidtag);
-        tft.print(MPTpidStrg);
-        MPTpidStrg=val;
-        tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTpidCL; SetColumnLine();
-        tft.print(MenuSolarMPTpidtag); 
-        tft.print(MPTpidStrg);
-    }
-    else if(label == "SER#"){   /// Columna2 Linea4 Numero de serie producto
-      MenuCL=MPTserCL; SetColumnLine();
-      tft.print(MenuSolarMPTsertag); 
-      tft.print(MPTSERStrg);
-        MPTSERStrg=val;
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTserCL; SetColumnLine();
-      tft.print(MenuSolarMPTsertag);
-      tft.print(MPTSERStrg);
-    }
-    else if(label == "ERR"){    /// Columna2 Linea5 Error Code
-      MenuCL=MPTerrCL; SetColumnLine();
-      tft.print(MenuSolarErrtag);  
-      tft.print(MPTErrorStrgmsg);
-        MPTErrorStrg=val;
-        MPTError=MPTErrorStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTerrCL; SetColumnLine();
-      tft.print(MenuSolarErrtag); 
-      if(MPTError==0){ // No error
-        MPTErrorStrgmsg=MenuSolarErr0Msg;
+  NewValueSet();
+  if(label == "V"){          // Battery Volt  mV     
+    MenuCL=MPTVbatCL; 
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTVbat, NewValuemilli, Two , "V");
+    MPTVbat=NewValuemilli;
+  } else if(label == "VPV"){          // Volt PV
+    MenuCL=MPTVpvCL; 
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTVpv, NewValuemilli, Two , "V");
+    MPTVpv=NewValuemilli;
+  } else if(label == "PPV"){          // Watt PV
+    MenuCL=MPTPpvCL;
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTPpv, NewValue, Zero , "W");
+    MPTPpv=NewValue;
+  } else if(label == "I"){          // I PV
+    MenuCL=MPTiCL;
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTAmp, NewValuemilli, Two , "A");
+    MPTAmp=NewValuemilli;
+  } else if(label == "H19"){          // Historic kWh
+    MenuCL=MPTkWhHistCL;
+    NewValuecentesi=NewValuecentesi+MPTkWhHistAdd;
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTkWhHist, NewValuecentesi, Zero , "kWhT");
+    MPTkWhHist=NewValuecentesi;
+  } else if(label == "H20"){          // kWh
+    MenuCL=MPTkWhCL;
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTkWh, NewValuedeca, Zero , "Wh");
+    MPTkWh=NewValuedeca;
+  } else if(label == "H21"){          // Wmax
+    MenuCL=MPTWmaxCL;
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTWmax, NewValue, Zero , "Wmax");
+    MPTWmax=NewValue;
+  } else if(label == "FW"){          // Firmware version
+    MenuCL=MPTfwCL;
+    SubMenuPrintStrg(TxtSize1,TextColorWhite,TextColorBlack, MPTfwStrg, NewValueStrg,"FW.");
+    MPTfwStrg=NewValueStrg;
+  } else if(label == "PID"){          // Product ID
+    MenuCL=MPTpidCL; 
+    SubMenuPrintStrg(TxtSize1,TextColorWhite,TextColorBlack, MPTpidStrg, NewValueStrg,"PID.");
+    MPTpidStrg=NewValueStrg;
+  } else if(label == "SER#"){          // Serial number
+    MenuCL=MPTserCL;
+    SubMenuPrintStrg(TxtSize1,TextColorWhite,TextColorBlack, MPTSERStrg, NewValueStrg,"SN.");
+    MPTSERStrg=NewValueStrg;
+  } else if(label == "ERR"){          // Error
+      if(NewValue==0){ // No error
+        NewValueStrg=MenuSolarErr0Msg;
       }
-      else if(MPTError==2){  // Bat too high
-        MPTErrorStrgmsg=MenuSolarErr2Msg;
+      else if(NewValue==2){  // Bat too high
+        NewValueStrg=MenuSolarErr2Msg;
       }
-      else if(MPTError==17){ // Temp too high
-        MPTErrorStrgmsg=MenuSolarErr17Msg;
+      else if(NewValue==17){ // Temp too high
+        NewValueStrg=MenuSolarErr17Msg;
       }
-      else if(MPTError==18){  // Over Current
-        MPTErrorStrgmsg=MenuSolarErr18Msg;
+      else if(NewValue==18){  // Over Current
+        NewValueStrg=MenuSolarErr18Msg;
       }
-      else if(MPTError==19){  // Current reverse
-        MPTErrorStrgmsg=MenuSolarErr19Msg;
+      else if(NewValue==19){  // Current reverse
+        NewValueStrg=MenuSolarErr19Msg;
       }
-      else if(MPTError==20){  // bulk time limit      
-        MPTErrorStrgmsg=MenuSolarErr20Msg;
+      else if(NewValue==20){  // bulk time limit      
+        NewValueStrg=MenuSolarErr20Msg;
       }
-      else if(MPTError==21){  // Current sensor fail
-        MPTErrorStrgmsg=MenuSolarErr21Msg;
+      else if(NewValue==21){  // Current sensor fail
+        NewValueStrg=MenuSolarErr21Msg;
       }
-      else if(MPTError==26){  // Terminal OverHeated
-        MPTErrorStrgmsg=MenuSolarErr26Msg;
+      else if(NewValue==26){  // Terminal OverHeated
+        NewValueStrg=MenuSolarErr26Msg;
       }
-      else if(MPTError==33){  // Volt too high PV
-        MPTErrorStrgmsg=MenuSolarErr33Msg;
+      else if(NewValue==33){  // Volt too high PV
+        NewValueStrg=MenuSolarErr33Msg;
       }
-      else if(MPTError==34){  // Amp too high PV
-        MPTErrorStrgmsg=MenuSolarErr34Msg;
+      else if(NewValue==34){  // Amp too high PV
+        NewValueStrg=MenuSolarErr34Msg;
       }
-      else if(MPTError==38){  // Excessive voltage battery                          
-        MPTErrorStrgmsg=MenuSolarErr38Msg;
+      else if(NewValue==38){  // Excessive voltage battery                          
+        NewValueStrg=MenuSolarErr38Msg;
       }
-      else if(MPTError==116){ // Facturoy calibration lost  
-        MPTErrorStrgmsg=MenuSolarErr116Msg;
+      else if(NewValue==116){ // Facturoy calibration lost  
+        NewValueStrg=MenuSolarErr116Msg;
       }
-      else if(MPTError==117){ // Firmware Invalid
-        MPTErrorStrgmsg=MenuSolarErr117Msg;
+      else if(NewValue==117){ // Firmware Invalid
+        NewValueStrg=MenuSolarErr117Msg;
       }
-      else if(MPTError==119){  // User Settings invalid
-        MPTErrorStrgmsg=MenuSolarErr119Msg;
+      else if(NewValue==119){  // User Settings invalid
+        NewValueStrg=MenuSolarErr119Msg;
       }
-      tft.print(MPTErrorStrgmsg);
-    }
-    else if(label == "CS"){     /// Columna2 Linea6 Estado operativo
-      MenuCL=MPTcsCL; SetColumnLine();
-      tft.print(MPTCStag); 
-      tft.print(MPTCSStrgmsg);
-        MPTCSStrg=val;
-        MPTCS=MPTCSStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTcsCL; SetColumnLine();
-      tft.print(MPTCStag);  
-      if(MPTCS==0){ // OFF
-        MPTCSStrgmsg=MenuSolarCS0Msg;
+    MenuCL=MPTerrCL;
+    SubMenuPrintStrg(TxtSize1,TextColorWhite,TextColorBlack, MPTErrorStrgmsg, NewValueStrg,"");
+    MPTErrorStrgmsg=NewValueStrg;
+  } else if(label == "CS"){     /// State
+      if(NewValue==0){ // OFF
+        NewValueStrg=MenuSolarCS0Msg;
       }
-      else if(MPTCS==2){ // FAULT MPPT & Inverter off hasta hacer Reset
-        MPTCSStrgmsg=MenuSolarCS2Msg;
+      else if(NewValue==2){ // FAULT MPPT & Inverter off hasta hacer Reset
+        NewValueStrg=MenuSolarCS2Msg;
       } 
-      else if(MPTCS==3){ // bulk
-        MPTCSStrgmsg=MenuSolarCS3Msg;
+      else if(NewValue==3){ // bulk
+        NewValueStrg=MenuSolarCS3Msg;
       }
-      else if(MPTCS==4){ // Absorption
-        MPTCSStrgmsg=MenuSolarCS4Msg;;
+      else if(NewValue==4){ // Absorption
+        NewValueStrg=MenuSolarCS4Msg;;
       }
-      else if(MPTCS==5){ // Float
-        MPTCSStrgmsg=MenuSolarCS5Msg;
+      else if(NewValue==5){ // Float
+        NewValueStrg=MenuSolarCS5Msg;
       }
-      tft.print(MPTCSStrgmsg);
-    }
-    else if(label == "H22"){    /// Columna2 Linea7 kWh ayer
-      MenuCL=MPTkWhAyerCL; SetColumnLine();
-      tft.print(MenuSolarkWhAyertag);
-      tft.print(MPTkWhAyer);
-      MPTkWhAyerStrg=val;
-      MPTkWhAyer=MPTkWhAyerStrg.toInt();
-      MPTkWhAyer=(MPTkWhAyer*centesiTo);
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTkWhAyerCL; SetColumnLine();
-      tft.print(MenuSolarkWhAyertag);
-      tft.print(MPTkWhAyer);
-    }
-    else if(label == "H23"){    /// Columna2 Linea8 Wmax Ayer
-      MenuCL=MPTWmaxAyerCL; SetColumnLine();
-        tft.print(MenuSolarMPTWmaxAytag);
-        tft.print(MPTWmaxAyer);
-        MPTWmaxAyerStrg=val;
-        MPTWmaxAyer=MPTWmaxAyerStrg.toInt();
-        tft.setTextColor(MenuTxtColor);
-      MenuCL=MPTWmaxAyerCL; SetColumnLine();
-        tft.print(MenuSolarMPTWmaxAytag);
-        tft.print(MPTWmaxAyer);
-    } 
+    MenuCL=MPTcsCL;
+    SubMenuPrintStrg(TxtSize1,TextColorWhite,TextColorBlack, MPTCSStrgmsg, NewValueStrg,"");
+    MPTCSStrgmsg=NewValueStrg;
+  } else if(label == "H22"){    /// kWh yesterday
+    MenuCL=MPTkWhAyerCL;
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTkWhAyer, NewValuedeca, Zero , "Ayer");
+    MPTkWhAyer=NewValuedeca;
+  } else if(label == "H23"){    /// Wmax yesterday
+    MenuCL=MPTWmaxAyerCL;
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTWmaxAyer, NewValue, Zero , "Ayer");
+    MPTWmaxAyer=NewValue;
   }else{}   
 }
-void Inverter(){       ///
+void Inverter(){       // SubMenu Inverter
   ReadSerial1();
-  TextSize1();
-  tft.setTextColor(MenuTxtColorRst);
-  if(Origin=="Inverter"){
-    if(label == "V"){                /// Columna1 Linea1 Battery Volt  mV     NO ANIM
-      MenuCL=IVTVbatCL; SetColumnLine();
-      tft.print(IVTVbat,3);
-      tft.print("V");
-      IVTVbatStrg=val;
-      IVTVbat=IVTVbatStrg.toInt(); 
-      IVTVbat=(IVTVbat*milliTo);
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTVbatCL; SetColumnLine();
-      tft.print(IVTVbat,3);
-      tft.print("V");
+  NewValueSet();
+  if(label == "V" && abs(IVTVbat- NewValuemilli)>=centesiTo){          // Battery Volt  mV   
+    MenuCL=IVTVbatCL; 
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, IVTVbat, NewValuemilli, Two , "V");
+    IVTVbat=NewValuemilli;
+  } else if(label=="AR"){              /// Alarm
+    MenuCL=IVTARCL;
+    if(NewValue==0){      // LOW VOLTAGE){
+      NewValueStrg=".";
+    }else if(NewValue==1){      // LOW VOLTAGE
+      NewValueStrg=MenuInverterAR1Msg;
+    }else if(NewValue==2){ // HIGH VOLTAGE
+      NewValueStrg=MenuInverterAR2Msg;
+    }else if(NewValue==32){ // Low Temp
+      NewValueStrg=MenuInverterAR32Msg;
+    }else if(NewValue==64){ // High Temp
+      NewValueStrg=MenuInverterAR64Msg;
+    }else if(NewValue==256){ // OverLoad
+      NewValueStrg=MenuInverterAR256Msg;
+    }else if(NewValue==512){ // DC ripple
+      NewValueStrg=MenuInverterAR512Msg;
+    }else if(NewValue==1024){ // Low V AC out
+      NewValueStrg=MenuInverterAR1024Msg;
+    }else if(NewValue==2048){ // High V AC out
+      NewValueStrg=MenuInverterAR2048Msg;
     }
-    else if(label=="AR"){              /// INVERTER Alarm Razon
-      MenuCL=IVTARCL; SetColumnLine();
-      tft.print(MenuInverterARtag);  
-      tft.print(IVTARStrgmsg);
-      IVTARStrg=val;
-      IVTAR=IVTARStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTARCL; SetColumnLine();
-      tft.print(MenuInverterARtag);
-      if(IVTAR==1){      // LOW VOLTAGE
-        IVTARStrgmsg=MenuInverterAR1Msg;
-      }
-      else if(IVTAR==2){ // HIGH VOLTAGE
-        IVTARStrgmsg=MenuInverterAR2Msg;
-      }
-      else if(IVTAR==32){ // Low Temp
-        IVTARStrgmsg=MenuInverterAR32Msg;
-      }
-      else if(IVTAR==64){ // High Temp
-        IVTARStrgmsg=MenuInverterAR64Msg;
-      }
-      else if(IVTAR==256){ // OverLoad
-        IVTARStrgmsg=MenuInverterAR256Msg;
-      }
-      else if(IVTAR==512){ // DC ripple
-        IVTARStrgmsg=MenuInverterAR512Msg;
-      }
-      else if(IVTAR==1024){ // Low V AC out
-        IVTARStrgmsg=MenuInverterAR1024Msg;
-      }
-      else if(IVTAR==2048){ // High V AC out
-        IVTARStrgmsg=MenuInverterAR2048Msg;
-      }
-      tft.print(IVTARStrgmsg);
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTARStrgmsg, NewValueStrg, "");
+    IVTARStrgmsg=NewValueStrg;
+  } else if(label == "CS"){     /// State
+    MenuCL=IVTcsCL; 
+    if(NewValue==0){ // OFF
+      NewValueStrg=MenuInverterCS0Msg;
+    } else if(NewValue==1){ // LOW POWER
+      NewValueStrg=MenuInverterCS1Msg;
+    } else if(NewValue==2){ // FAULT
+      NewValueStrg=MenuInverterCS3Msg;
+    } else if(NewValue==9){ // INVERTER
+      NewValueStrg=MenuInverterCS4Msg;
     }
-    else if(label == "CS"){     /// Columna2 Linea6 Estado operativo
-      MenuCL=IVTcsCL; SetColumnLine();
-      tft.print(IVTCSStrgmsg);
-      IVTCSStrg=val;
-      IVTCS=IVTCSStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTcsCL; SetColumnLine();
-      if(IVTCS==0){ // OFF
-        IVTCSStrgmsg=MenuInverterCS0Msg;
-      }
-      else if(IVTCS==1){ // LOW POWER
-        IVTCSStrgmsg=MenuInverterCS1Msg;
-      } 
-      else if(IVTCS==2){ // FAULT
-        IVTCSStrgmsg=MenuInverterCS3Msg;
-      }
-      else if(IVTCS==9){ // INVERTER
-        IVTCSStrgmsg=MenuInverterCS4Msg;
-      }
-      tft.print(IVTCSStrgmsg);
-    }
-    else if(label == "FW"){     /// Columna2 Linea2 Firmware
-      MenuCL=IVTfwCL; SetColumnLine();
-      tft.print(MenuInverterfwtag);
-      tft.print(IVTfwStrg);
-      IVTfwStrg=val;
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTfwCL; SetColumnLine();
-      tft.print(MenuInverterfwtag);  
-      tft.print(IVTfwStrg);
-    }
-    else if(label == "PID"){    /// Columna2 Linea3 Product ID
-      MenuCL=IVTpidCL; SetColumnLine();
-        tft.print(MenuIVTpidtag);
-        tft.print(IVTpidStrg);
-        IVTpidStrg=val;
-        tft.setTextColor(MenuTxtColor);
-        MenuCL=IVTpidCL; SetColumnLine();
-        tft.print(MenuIVTpidtag); 
-        tft.print(IVTpidStrg);
-    }
-    else if(label == "SER#"){   /// Columna2 Linea4 Numero de serie producto
-      MenuCL=IVTserCL; SetColumnLine();
-      tft.print(MenuIVTsertag); 
-      tft.print(IVTSERStrg);
-      IVTSERStrg=val;
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTserCL; SetColumnLine();
-      tft.print(MenuIVTsertag);
-      tft.print(IVTSERStrg);
-    }
-    else if(label=="MODE"){              /// INVERTER Alarm Razon
-      MenuCL=IVTmodeCL; SetColumnLine();
-      tft.print(MenuInverterModetag);  
-      tft.print(IVTmodeStrgmsg);
-      IVTModeStrg=val;
-      IVTMode=IVTModeStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTmodeCL; SetColumnLine();
-      tft.print(MenuInverterModetag);
-      if(IVTMode==2){      // INVERTER ON
-        IVTmodeStrgmsg=MenuInvertermode2Msg;
-      }
-      else if(IVTMode==4){ // OFF
-        IVTmodeStrgmsg=MenuInvertermode4Msg;
-      }
-      else if(IVTMode==5){ // ECO
-        IVTmodeStrgmsg=MenuInvertermode5Msg;
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTCSStrgmsg, NewValueStrg, "");
+    IVTCSStrgmsg=NewValueStrg;
+  } else if(label == "FW"){     /// Firmware
+    MenuCL=IVTfwCL;    
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTfwStrg, NewValueStrg, "FW.");
+    IVTfwStrg=NewValueStrg;
+  } else if(label == "PID"){    /// Product ID
+    MenuCL=IVTpidCL;
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTpidStrg, NewValueStrg, "PID.");
+    IVTpidStrg=NewValueStrg;
+  } else if(label == "SER#"){   /// Number Serie
+    MenuCL=IVTserCL; 
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTSERStrg, NewValueStrg, "SN.");
+    IVTSERStrg=NewValueStrg;
+  } else if(label=="MODE"){              /// Mode
+      if(NewValue==0){      // INVERTER ON
+        NewValueStrg=".";
+      } else if(NewValue==2){      // INVERTER ON
+        NewValueStrg=MenuInvertermode2Msg;
+      } else if(NewValue==4){ // OFF
+        NewValueStrg=MenuInvertermode4Msg;
+      } else if(IVTMode==5){ // ECO
+        NewValueStrg=MenuInvertermode5Msg;
       }   
-      tft.print(IVTmodeStrgmsg);
-    }
-    else if(label == "AC_OUT_V"){      // Columna1 Linea2 Panel Volt mV
-      MenuCL=IVTACVCL; SetColumnLine();
-      tft.print(IVTACV,1);
-      tft.print(" V AC");
-      IVTACVStrg=val;
-      IVTACV=IVTACVStrg.toInt();
-      IVTACV=(IVTACV*centesiTo);         //0.01 centesimo  CentesiTo
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTACVCL; SetColumnLine();
-      tft.print(IVTACV,1);
-      tft.print(" V AC");
-    }
-    else if(label == "AC_OUT_I"){      // Columna1 Linea2 Panel Volt mV
-      MenuCL=IVTACICL; SetColumnLine();
-      tft.print(IVTACI,3);
-      tft.print(" A AC");
-      IVTACIStrg=val;
-      IVTACI=IVTACIStrg.toInt();
-      IVTACI=(IVTACI*decimTo);         
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTACICL; SetColumnLine();
-      tft.print(IVTACI,3);
-      tft.print(" A AC");
-    }
-    else if(label == "AC_OUT_S"){      // Columna1 Linea2 Panel Volt mV
-      MenuCL=IVTACSCL; SetColumnLine();
-      tft.print(IVTACS);
-      tft.print(" VA");
-      IVTACSStrg=val;
-      IVTACS=IVTACSStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTACSCL; SetColumnLine();
-      tft.print(IVTACS);
-      tft.print(" VA");
-    }
-    else if(label=="WARN"){              /// INVERTER Alarm Razon
-      MenuCL=IVTWarnCL; SetColumnLine();
-      tft.print(MenuInverterwarntag);  
-      tft.print(IVTWarnStrgmsg);
-      IVTWarnStrg=val;
-      IVTWarn=IVTWarnStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTWarnCL; SetColumnLine();
-      tft.print(MenuInverterwarntag);
-      if(IVTWarn==1){      // LOW VOLTAGE
-        IVTWarnStrgmsg=MenuInverterwarn1Msg;
-      } 
-      else if(IVTWarn==2){ // HIGH VOLTAGE
-        IVTWarnStrgmsg=MenuInverterwarn2Msg;
-      }
-      else if(IVTWarn==32){ // Low Temp
-        IVTWarnStrgmsg=MenuInverterwarn32Msg;
-      }
-      else if(IVTWarn==64){ // High Temp
-        IVTWarnStrgmsg=MenuInverterwarn64Msg;
-      }
-      else if(IVTWarn==256){ // OverLoad
-        IVTWarnStrgmsg=MenuInverterwarn256Msg;
-      }
-      else if(IVTWarn==512){ // DC ripple
-        IVTWarnStrgmsg=MenuInverterwarn512Msg;
-      }
-      else if(IVTWarn==1024){ // Low V AC out
-        IVTWarnStrgmsg=MenuInverterwarn1024Msg;
-      }
-      else if(IVTWarn==2048){ // High V AC out
-        IVTWarnStrgmsg=MenuInverterwarn2048Msg;
-      }
-      tft.print(IVTWarnStrgmsg);
-    }
+    MenuCL=IVTmodeCL;
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTmodeStrgmsg, NewValueStrg, "");
+    IVTmodeStrgmsg=NewValueStrg;
+  } else if(label == "AC_OUT_V"){      // V ac
+      MenuCL=IVTACVCL; 
+      SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, IVTACV, NewValuecentesi, Two , "Vac");
+      IVTACV=NewValuecentesi;
+  } else if(label == "AC_OUT_I"){      // I ac
+      MenuCL=IVTACICL; 
+      SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, IVTACI, NewValuedecim, Two , "Aac");
+      IVTACI=NewValuedecim;
+  } else if(label == "AC_OUT_S"){      // VA ac
+      MenuCL=IVTACSCL;
+      SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, IVTACS, NewValue, Two , "VA");
+      IVTACS=NewValue;
+  } else if(label=="WARN"){              /// Warm
+    if(NewValue==0){ 
+        NewValueStrg=".";
+      } else if(NewValue==1){      // LOW VOLTAGE
+        NewValueStrg=MenuInverterwarn1Msg;
+      } else if(NewValue==2){ // HIGH VOLTAGE
+        NewValueStrg=MenuInverterwarn2Msg;
+      } else if(NewValue==32){ // Low Temp
+        NewValueStrg=MenuInverterwarn32Msg;
+      } else if(NewValue==64){ // High Temp
+        NewValueStrg=MenuInverterwarn64Msg;
+      } else if(NewValue==256){ // OverLoad
+        NewValueStrg=MenuInverterwarn256Msg;
+      } else if(NewValue==512){ // DC ripple
+        NewValueStrg=MenuInverterwarn512Msg;
+      } else if(NewValue==1024){ // Low V AC out
+        NewValueStrg=MenuInverterwarn1024Msg;
+      } else if(NewValue==2048){ // High V AC out
+        NewValueStrg=MenuInverterwarn2048Msg;
+    }    
+    MenuCL=IVTWarnCL;
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTWarnStrgmsg, NewValueStrg, "");
+    IVTWarnStrgmsg=NewValueStrg; 
   }
 }
-void Battery(){        ///
-    TextSize1();
-    tft.setTextColor(MenuTxtColor);
+void Battery(){        // SubMenu Battery
+  ReadSerial2();
+  NewValueSet();
+  if(label == "V" && abs(MPTVbat - NewValuemilli)>=centesiTo){          // Battery Volt  mV   
+    MenuCL=BATmptVbatCL; 
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTVbat, NewValuemilli, Two , "Vmppt");
+    MPTVbat=NewValuemilli;
+  }
+    tft.setFont(TxtSize1);             // display device specifications noted by user
+    tft.setTextColor(TextColorBlack);
     MenuCL=BATkWhCL; SetColumnLine();
     tft.print(BATkWh);
     MenuCL=BATTipCL; SetColumnLine();
@@ -1588,222 +1241,112 @@ void Battery(){        ///
     tft.print(BATVolt);
     MenuCL=BATVChargCL; SetColumnLine();
     tft.print(BATVCharg);
-    ReadSerial1();
-    tft.setTextColor(MenuTxtColorRst);
-    if(label == "V"){                /// Columna1 Linea1 Battery Volt  mV     NO ANIM
-        ResetIVTData=ResetLoopDefault;  // dato recibido correctamente no resetar los datos
-        MenuCL=BATivtVbatCL; SetColumnLine();
-        tft.print(batIVTVbattag);
-        tft.print(IVTVbat,3);
-        tft.print("V");
-        IVTVbatStrg=val;
-        IVTVbat=IVTVbatStrg.toInt(); 
-        IVTVbat=(IVTVbat*milliTo);
-        tft.setTextColor(MenuTxtColor);
-        MenuCL=BATivtVbatCL; SetColumnLine();
-        tft.print(batIVTVbattag);
-        tft.print(IVTVbat,3);
-        tft.print("V");
-        if((IVTVbat<VBatdataErrorL)||(IVTVbat>VBatdataErrorH)){
-          ResetIVTData=(ResetIVTData-1);
-        if(ResetIVTData<1){           
-          DataResetIVT();
-          }else{  
-        } 
-      }
-    }
-    ReadSerial2();
-    tft.setTextColor(MenuTxtColorRst);
-    if(label == "V"){             // Columna1 Linea1 Battery Volt  mV     NO ANIM
-      ResetMPTData=ResetLoopDefault;  // dato recibido correctamente no resetar los datos
-      MenuCL=BATmptVbatCL; SetColumnLine();
-      tft.print(batMPTVbattag);
-      tft.print(MPTVbat,3);
-      tft.print("V");
-      MPTVbatStrg=val;
-      MPTVbat=MPTVbatStrg.toInt(); 
-      MPTVbat=(MPTVbat*milliTo);
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=BATmptVbatCL; SetColumnLine();
-      tft.print(batMPTVbattag);
-      tft.print(MPTVbat,3);
-      tft.print("V");
-      if((MPTVbat<VBatdataErrorL)||(MPTVbat>VBatdataErrorH)){
-        ResetMPTData=(ResetMPTData-1);
-        if(ResetMPTData<1){           
-          DataResetMPT();
-          }else{  
-        } 
-      }
-    }
-}
-void Charger(){  // todavia no hay datos pendiente implementar currento sensor
-  ReadSerial2();
-  TextSize1();
-  tft.setTextColor(MenuTxtColorRst);
-  if(Origin=="MPPT"){
-    if(label == "V"){             // Columna1 Linea1 Battery Volt  mV     NO ANIM
-      MenuCL=CHRGMPTVbatCL; SetColumnLine();
-      tft.print(MPTVbat,3);
-      tft.print("V");
-      MPTVbatStrg=val;
-      MPTVbat=MPTVbatStrg.toInt(); 
-      MPTVbat=(MPTVbat*milliTo);
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=CHRGMPTVbatCL; SetColumnLine();
-      tft.print(MPTVbat,3);
-      tft.print("V");
-    }
-  }
-  CurrentSensor();
-  if(CurrSens==NewValue){
-  }else{
-    TextSize1();
-    tft.setTextColor(MenuTxtColorRst);
-    MenuCL=CHRGCurrSensCL; SetColumnLine();
-    tft.print(CurrSens,1);              ///// B0rrar Current Sensor valor anterior
-    tft.print(" A");                     ///// Borrar Letra A
-    tft.setTextColor(TextColorBlack);    ///// Escribir en blanco
-    MenuCL=CHRGCurrSensCL; SetColumnLine();
-    tft.print(NewValue,1);              ///// Escribir Nuevo valor
-    tft.print(" A");                     ///// Escribir Letra A
-    CurrSens=NewValue;             ///// Establecer el nuevo valor con valor antiguo para la proxima verificacion
-  }
-  NewValue=Zero;                        ///// Resetear NewValue
-}
-void Load(){
+
   ReadSerial1();
-  TextSize1();
-  tft.setTextColor(MenuTxtColorRst);
-  if(Origin=="Inverter"){
-    if(label=="AR"){              /// INVERTER Alarm Razon
-     MenuCL=IVTARCL; SetColumnLine();
-     tft.print(MenuInverterARtag);  
-     tft.print(IVTARStrgmsg);
-     IVTARStrg=val;
-     IVTAR=IVTARStrg.toInt();
-     tft.setTextColor(MenuTxtColor);
-     MenuCL=IVTARCL; SetColumnLine();
-     tft.print(MenuInverterARtag);
-     if(IVTAR==1){      // LOW VOLTAGE
-       IVTARStrgmsg=MenuInverterAR1Msg;
+  NewValueSet();
+  if(label == "V" && abs(IVTVbat- NewValuemilli)>=centesiTo){          // Battery Volt  mV     
+    MenuCL=BATivtVbatCL; 
+    SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, IVTVbat, NewValuemilli, Two , "Vivrt");
+    IVTVbat=NewValuemilli;
+  }
+}
+void Charger(){        // SubMenu Charger
+  ReadSerial2();
+  NewValueSet();
+    if(label == "V" && abs(MPTVbat - NewValuemilli)>=decimTo){          // Battery Volt  mV  
+      MenuCL=CHRGMPTVbatCL; 
+      if( NewValuemilli > InverterVbatmin && NewValuemilli < InverterVbatmax ){         
+        SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, MPTVbat, NewValuemilli, Two , "V");
+        MPTVbat=NewValuemilli;
       }
-      else if(IVTAR==2){ // HIGH VOLTAGE
-        IVTARStrgmsg=MenuInverterAR2Msg;
-      }
-      else if(IVTAR==32){ // Low Temp
-        IVTARStrgmsg=MenuInverterAR32Msg;
-      }
-      else if(IVTAR==64){ // High Temp
-        IVTARStrgmsg=MenuInverterAR64Msg;
-      }
-      else if(IVTAR==256){ // OverLoad
-        IVTARStrgmsg=MenuInverterAR256Msg;
-      }
-      else if(IVTAR==512){ // DC ripple
-        IVTARStrgmsg=MenuInverterAR512Msg;
-      }
-      else if(IVTAR==1024){ // Low V AC out
-        IVTARStrgmsg=MenuInverterAR1024Msg;
-      }
-      else if(IVTAR==2048){ // High V AC out
-        IVTARStrgmsg=MenuInverterAR2048Msg;
-      }
-      tft.print(IVTARStrgmsg);
     }
-    else if(label=="MODE"){              /// INVERTER Alarm Razon
-      MenuCL=IVTmodeCL; SetColumnLine();
-      tft.print(MenuInverterModetag);  
-      tft.print(IVTmodeStrgmsg);
-      IVTModeStrg=val;
-      IVTMode=IVTModeStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTmodeCL; SetColumnLine();
-      tft.print(MenuInverterModetag);
-      if(IVTMode==2){      // INVERTER ON
-        IVTmodeStrgmsg=MenuInvertermode2Msg;
-      }
-      else if(IVTMode==4){ // OFF
-        IVTmodeStrgmsg=MenuInvertermode4Msg;
-      }
-      else if(IVTMode==5){ // ECO
-        IVTmodeStrgmsg=MenuInvertermode5Msg;
-      }   
-      tft.print(IVTmodeStrgmsg);
-    }
-    else if(label == "AC_OUT_V"){      // Columna1 Linea2 Panel Volt mV
-      MenuCL=IVTACVCL; SetColumnLine();
-      tft.print(IVTACV,1);
-      tft.print(" V AC");
-      IVTACVStrg=val;
-      IVTACV=IVTACVStrg.toInt();
-      IVTACV=(IVTACV*centesiTo);         //0.01 centesimo  CentesiTo
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTACVCL; SetColumnLine();
-      tft.print(IVTACV,1);
-      tft.print(" V AC");
-    }
-    else if(label == "AC_OUT_I"){      // Columna1 Linea2 Panel Volt mV
-      MenuCL=IVTACICL; SetColumnLine();
-      tft.print(IVTACI,3);
-      tft.print(" A AC");
-      IVTACIStrg=val;
-      IVTACI=IVTACIStrg.toInt();
-      IVTACI=(IVTACI*decimTo);         
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTACICL; SetColumnLine();
-      tft.print(IVTACI,3);
-      tft.print(" A AC");
-    }
-    else if(label == "AC_OUT_S"){      // Columna1 Linea2 Panel Volt mV
-      MenuCL=IVTACSCL; SetColumnLine();
-      tft.print(IVTACS);
-      tft.print(" VA");
-      IVTACSStrg=val;
-      IVTACS=IVTACSStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTACSCL; SetColumnLine();
-      tft.print(IVTACS);
-      tft.print(" VA");
-    }
-    else if(label=="WARN"){              /// INVERTER Alarm Razon
-      MenuCL=IVTWarnCL; SetColumnLine();
-      tft.print(MenuInverterwarntag);  
-      tft.print(IVTWarnStrgmsg);
-      IVTWarnStrg=val;
-      IVTWarn=IVTWarnStrg.toInt();
-      tft.setTextColor(MenuTxtColor);
-      MenuCL=IVTWarnCL; SetColumnLine();
-      tft.print(MenuInverterwarntag);
-      if(IVTWarn==1){      // LOW VOLTAGE
-        IVTWarnStrgmsg=MenuInverterwarn1Msg;
-      } 
-      else if(IVTWarn==2){ // HIGH VOLTAGE
-        IVTWarnStrgmsg=MenuInverterwarn2Msg;
-      }
-      else if(IVTWarn==32){ // Low Temp
-        IVTWarnStrgmsg=MenuInverterwarn32Msg;
-      }
-      else if(IVTWarn==64){ // High Temp
-        IVTWarnStrgmsg=MenuInverterwarn64Msg;
-      }
-      else if(IVTWarn==256){ // OverLoad
-        IVTWarnStrgmsg=MenuInverterwarn256Msg;
-      }
-      else if(IVTWarn==512){ // DC ripple
-        IVTWarnStrgmsg=MenuInverterwarn512Msg;
-      }
-      else if(IVTWarn==1024){ // Low V AC out
-        IVTWarnStrgmsg=MenuInverterwarn1024Msg;
-      }
-      else if(IVTWarn==2048){ // High V AC out
-        IVTWarnStrgmsg=MenuInverterwarn2048Msg;
-      }
-      tft.print(IVTWarnStrgmsg);
+
+  CurrentSensor();
+  MenuCL=CHRGCurrSensCL;
+  if(abs(CurrSens - NewValue)>=decuTo){     //Charger Current Sensor 
+    if( NewValue >= Zero && NewValue < ChargerImax ){
+      SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, CurrSens, NewValue, Two , "A");
+      CurrSens=NewValue;             
     }
   }
 }
-void MenuCheck(){   // go to touched menu
+void Load(){           // SubMenu Load
+  ReadSerial1();
+  NewValueSet();
+  if(label=="AR"){                     // Alarm 
+    MenuCL=IVTARCL;
+    if(NewValue==0){      // LOW VOLTAGE){
+      NewValueStrg=".";
+    }else if(NewValue==1){      // LOW VOLTAGE
+      NewValueStrg=MenuInverterAR1Msg;
+    }else if(NewValue==2){ // HIGH VOLTAGE
+      NewValueStrg=MenuInverterAR2Msg;
+    }else if(NewValue==32){ // Low Temp
+      NewValueStrg=MenuInverterAR32Msg;
+    }else if(NewValue==64){ // High Temp
+      NewValueStrg=MenuInverterAR64Msg;
+    }else if(NewValue==256){ // OverLoad
+      NewValueStrg=MenuInverterAR256Msg;
+    }else if(NewValue==512){ // DC ripple
+      NewValueStrg=MenuInverterAR512Msg;
+    }else if(NewValue==1024){ // Low V AC out
+      NewValueStrg=MenuInverterAR1024Msg;
+    }else if(NewValue==2048){ // High V AC out
+      NewValueStrg=MenuInverterAR2048Msg;
+    }
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTARStrgmsg, NewValueStrg, "");
+    IVTARStrgmsg=NewValueStrg;
+  } else if(label=="MODE"){            // Mode
+    MenuCL=IVTmodeCL;
+    if(NewValue==0){      // LOW VOLTAGE){
+        NewValueStrg=".";
+      }else if(NewValue==2){      // INVERTER ON
+        NewValueStrg=MenuInvertermode2Msg;
+      }else if(NewValue==4){ // OFF
+        NewValueStrg=MenuInvertermode4Msg;
+      }else if(NewValue==5){ // ECO
+        NewValueStrg=MenuInvertermode5Msg;
+    }   
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTmodeStrgmsg, NewValueStrg, "");
+    IVTmodeStrgmsg=NewValueStrg;
+  } else if(label == "AC_OUT_V"){      // Vac
+      MenuCL=IVTACVCL; 
+      SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, IVTACV, NewValuecentesi, Two , "  Vac");
+      IVTACV=NewValuecentesi;
+  } else if(label == "AC_OUT_I"){      // Iac
+      MenuCL=IVTACICL; 
+      SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, IVTACI, NewValuedecim, Two , "     Aac");
+      IVTACI=NewValuedecim;
+  } else if(label == "AC_OUT_S"){      // VA
+      MenuCL=IVTACSCL;
+      SubMenuPrintInt(TxtSize1,TextColorWhite,TextColorBlack, IVTACS, NewValue, Two , "  VA");
+      IVTACS=NewValue;
+  } else if(label=="WARN"){            // Warm 
+    if(NewValue==0){ 
+        NewValueStrg=".";
+      } else if(NewValue==1){      // LOW VOLTAGE
+        NewValueStrg=MenuInverterwarn1Msg;
+      } else if(NewValue==2){ // HIGH VOLTAGE
+        NewValueStrg=MenuInverterwarn2Msg;
+      } else if(NewValue==32){ // Low Temp
+        NewValueStrg=MenuInverterwarn32Msg;
+      } else if(NewValue==64){ // High Temp
+        NewValueStrg=MenuInverterwarn64Msg;
+      } else if(NewValue==256){ // OverLoad
+        NewValueStrg=MenuInverterwarn256Msg;
+      } else if(NewValue==512){ // DC ripple
+        NewValueStrg=MenuInverterwarn512Msg;
+      } else if(NewValue==1024){ // Low V AC out
+        NewValueStrg=MenuInverterwarn1024Msg;
+      } else if(NewValue==2048){ // High V AC out
+        NewValueStrg=MenuInverterwarn2048Msg;
+    }    
+    MenuCL=IVTWarnCL;
+    SubMenuPrintStrg(TxtSize1,TextColorWhite, TextColorBlack, IVTWarnStrgmsg, NewValueStrg, "");
+    IVTWarnStrgmsg=NewValueStrg; 
+  }
+}
+void MenuCheck(){      // Touch go to Menu
   if(MenuPresent=="Home"){
       Home();
     }else if(MenuPresent=="Solar"){
@@ -1818,27 +1361,13 @@ void MenuCheck(){   // go to touched menu
      Load();
   }
 }
-void SetColumnLine() {   //// Copilot Asist 
-  int column, line;
-  sscanf(MenuCL.c_str(), "C%dL%d", &column, &line);
-  line--;                                          // start from line0
-  if (column == 1) {
-    tft.setCursor(MenuColumn1X, MenuColumn1Y + (MenuColumn1NextLine * line));
-  } else if (column == 2) {
-    tft.setCursor(MenuColumn2X, MenuColumn2Y + (MenuColumn2NextLine * line));
-  }
-}
+
 
 void setup(){
-  pinMode(CS_PIN,OUTPUT);                                // a nivel alto al iniciar
-  digitalWrite(CS_PIN,HIGH);                             //  a nivel alto al iniciar
-  pinMode(TFT_CS,OUTPUT);                                 // Configurar como salida
-  pinMode(CurrSensPin, INPUT);                           // Configura el pin como entrada
-  analogReadResolution(12);                              //  config 12 bits para el ADC
-  SerialIni();
-  TFTSetIni();
+  SerialSet();
+  PinSet();
+  DisplaySet();
   Touched();
-  TextSetup();
 }
 
 void loop(){  
