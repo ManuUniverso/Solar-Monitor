@@ -5,7 +5,8 @@ An ESP32 is attached, with an ili9341 screen using the touch to navigate the int
 
 This is only a solar energy control monitor, it does not allow you to change the settings of your Victron devices.
 
-It will be updated often until reaching a stable version that I will call V1. If you see that we are still with version V0.X.X you should keep in mind that it can be used but will still have bugs.
+First stable v1. Still some bug in the show display.
+The comments are now mostly in English and some have yet to change.
 
 ![Image](SolarMonitorDisplayV1.jpg)
 
