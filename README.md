@@ -7,7 +7,7 @@ This is only a solar energy control monitor, it does not allow you to change the
 
 It will be updated often until reaching a stable version that I will call V1. If you see that we are still with version V0.X.X you should keep in mind that it can be used but will still have bugs.
 
-![Image](SolarMonitorDisplay.jpg)
+![Image](SolarMonitorDisplayV1.jpg)
 
 Connection diagram attached
 
