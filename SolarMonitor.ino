@@ -1,4 +1,4 @@
-/* Solar Monitor v1.0.0 ManuUniverso 2024
+/* Solar Monitor v1.1.0 ManuUniverso 2024
 
 First stable version. Still some bug in the show display.
 An ESP32 is used, data is read from the VE.Direct (Victron Energy brand) ports of the Inverter and MPPT. Then display the results on a color screen ili9341.
@@ -30,6 +30,7 @@ Version Date Author Comment
 0.1.1 14/01/2024 Added touch function with submenu
 0.1.2 23/01/2024 small bug & Current Sensor HCS LSP 20A for Charger (without ve direct)
 1.0.0 30/01/2024 great changes and improvements, first stable version, add dimming mode LDR
+1.1.0 06/02/2024 Add Relay Functions & bug fix bar battery level & text flicker fix & Current Sensor improvement
 
    *****************************************************************************
    The reading of the port was achieved thanks to the fantastic contribution of Âld Skânser:
@@ -41,28 +42,29 @@ Version Date Author Comment
   
    Using two UART ports of the ESP32, VE.Direct data reading is carried out
    of the inverter and mppt.
-   Attention, it is necessary to use a logic level converter circuit
-   to adapt the logic level to the ESP32 3.3v.
-   Attention, it is necessary to use an isolator circuit to separate correctly
-   the GNDs to avoid ground loops or other problems.
-   Using a 30pin ESP32 devkit v1 node32s & Isolator Based on chipset π122U31
+    Attention, it is necessary to use a logic level converter circuit
+    to adapt the logic level to the ESP32 3.3v.
+    Attention, it is necessary to use an isolator circuit to separate correctly
+    the GNDs to avoid ground loops or other problems.
+    Using a 30pin ESP32 devkit v1 node32s & Isolator Based on chipset π122U31
 
    In this example an ili9341 SPI TFT LCD display is used.
-   The touch part is made possible with the XP2046 resistive ADC chip.
-   It can only detect one touch at a time.
-   The SD card reader it has is independent and uses SPI but in
-   This version of the code is not used.
+    The touch part is made possible with the XP2046 resistive ADC chip.
+    It can only detect one touch at a time.
+    The SD card reader it has is independent and uses SPI but in
+    This version of the code is not used.
 
    The libraries as well as diagrams should be provided with this code for their correct use.
    -"ResetAnim.h""MenuHome.h""MenuSolar.h""MenuCharger.h" "MenuInverter.h""MenuBat.h""MenuLoad.h"
-   - SolarMonitor.jpg diagrams & pin connection
+   - jpg diagrams & pin connection
      .ESP32 Pin image from https://www.LastMinuteEngineers.com
-     .ili9341 image from https://bidouilleur.ca/
+     .ili9341 image from https://bidouilleur.ca/ && https://www.youtube.com/watch?v=hcMU5H6vzxI
      .Current Sensor
-     -LDR Dimming mode
+     .LDR Dimming mode
+     .Relay (Meross Hack) I contributed to this forum https://forum.bidouilleur.ca/index.php?topic=1222.msg8327#msg8327 
 
    The board Available direcetly from the Arduino IDE v2 
-   - arduino-esp32    "Select USB correct"  & "node32s"
+   -arduino-esp32    "Select USB correct"  & "node32s"
    The libraries Available directly from the Arduino IDE v2 library manager.
    -XPT2046_Touchscreen.h
    -Adafruit_ILI9341.h
@@ -71,11 +73,13 @@ Version Date Author Comment
    -Fonts/FreeSansBold18pt7b.h No need to download, it is included in the previous ones.
    Pin & Config:
    -Current Sensor Model ZY264-20A HCS LSP 20A voltage supply will affect the reading value 
-   -Current Sensor Compatible with 5v but used with 3.3 it is capable of measuring current in both directions. 
-   -Current Sensor loses measurement dynamics with 3.3v, To use 5v you need a logic level adapter to 3.3v
-   -Current Sensor 3.3v will affect the reading value  you must calibrate the two values CurrSensRAW
-   -Current Sensor GND ( from ESP32 )
-   -Current Sensor OUT ---> GPIO33
+   -Current Sensor It is powered with 5V. Then a voltage divider with two resistors 2k7 and 4k7 make it safe to use for the esp32.This serves to adapt the logical level
+   -Current Sensor you should not use the same isolators that are used in VE Direct.
+   -Current Sensor 5V]---[2k7]---pin input ESP23---[4k7]---[GND
+   -Current Sensor The value of the resistors varies depending on their quality, you must calibrate the RAW values in the code (search "calibra")
+   -Current Sensor Pin 5V                        between this and output you should have 2k7
+   -Current Sensor Pin GND                       between this and 5v you should have 2k7+4k7 = 7k4 aproxi
+   -Current Sensor Pin Output ---> ESP32 GPIO33  between this and gnd you must have 4k7
    -ESP32 UART1 rate 19200             
    -ESP32 UART2 rate 19200                                                  
    -ESP32 Pin 27 UART1 RX <-- VE.Direct Inverter TX 
@@ -87,10 +91,13 @@ Version Date Author Comment
    -ESP32 Pin 19  --- TFT_MISO  image
    -ESP32 Pin 21  --- CS_PIN    Touchscreen
    -ESP32 Pin 34  --- TIRQ_PIN  Touchscreen
-   -Dimming mode  ---3.3v ---LDR---LED Pin Display  You only need to connect an LDR in series to the LED pin of the display as in the diagram.      
+   -Dimming mode  ---3.3v]---[LDR]---[LED Pin  (You only need to connect an LDR in series to the LED pin of the display as in the diagram)
+   -Relay Pin 32  --- Relay  (Here you can use a PC817 type optocoupler for example to activate a relay to use as in my case modified smart plug)
+   -Relay used with smart plug and charger, logically it should not be used with the 230 from Inverter. I know you know but the plugs are all the same and you have to verify that
+   -Relay I am using a smart plug connected to remotely turn on the charger, in this link you can see how to access activation from outside for our esp32. Remember the optocoupler is necessary as an isolator !
    *****************************************************************************
 
-   !  //***  They must be reviewed and established by the user for correct operation !
+      !! --> //***  They must be reviewed and established by the user for correct operation !
 
 */
 
@@ -113,9 +120,7 @@ Version Date Author Comment
 #define UARTRate2 19200                                    /// VE.Direct Pin MPPT  no es necesario asignar, usar los pines previsto RX2 y TX2 en el ESP32
 #define ResetLoopDefault 200                               /// VE.Direct Pin Data Reset  ResetMPTData ResetIVTData ResetLoopDefault
 #define CurrSensPin 33                                     /// Current Sensor Pin charger control GPIO33 ADC1_5
-#define CurrSensRAWZero 2899                               /// Current Sensor RAWvalue 0 Amp (afectado por la tension de alimentacion del sensor)   4095 / 2            = 2047.5
-#define CurrSensRAWUnit 0.0064                             /// Current Sensor RAWvalue 1 Amp (afectado por la tension de alimentacion del sensor)      1 / (20A/2047.5) = 102.3 por 1A que es lo mismo que multiplicar por eso 0.006...
-#define CurrSensAVG 256                                    /// Current Sensor Average Calcul
+#define PinRelay 32                                        /// Relay Pin D32 GPIO32
 #define TFT_DC 2                                           /// Display ili9341 pin para imagen
 #define TFT_CS 15                                          /// Display ili9341 pin para imagen
 #define TFT_MOSI 23                                        /// Display ili9341 pin para imagen (no se especifica en "Adafruit_ILI9341 tft" para evitar el [SPI Software limitado a 400Khz Max]; es mejor [SPI Material integrada puede alcanzar Mhz]
@@ -139,7 +144,7 @@ Version Date Author Comment
 #define MPTCSColor2 ILI9341_RED                            /// MPPT Color2 FAULT
 #define MPTCSColor3 ILI9341_BLUE                           /// MPPT Color 3 BULK
 #define MPTCSColor4 ILI9341_YELLOW                         /// MPPT Color 4 ABSORPTION
-#define MPTCSColor5 ILI9341_GREEN            /             /// MPPT Color 5 FLOAT
+#define MPTCSColor5 ILI9341_GREEN                          /// MPPT Color 5 FLOAT
 #define LedRad 4                                           /// Image Led Estado tamaño Radio ( simula un led en el display )
 #define LedMPPTX 235                                       /// Image Menu Home MPPT Led estado Cursor eje X
 #define LedMPPTY 116                                       /// Image Menu Home MPPT Led estado Cursor eje Y
@@ -186,7 +191,11 @@ Version Date Author Comment
 #define TchLoadXmin 360                                    /// Touch Go Menu Load Cursor X min             if ((p.x > TchLoadXmin && p.x < TchLoadXmax) && (p.y > TchLoadYmin && p.y < TchLoadYmax)) {
 #define TchLoadXmax 1400                                   /// Touch Go Menu Load Cursor X max 
 #define TchLoadYmin 2600                                   /// TouchGo Menu Load Cursor Y min 
-#define TchLoadYmax 3740                                   /// Touch Go Menu Load Cursor Y max 
+#define TchLoadYmax 3740                                   /// Touch Go Menu Load Cursor Y max
+#define TchRelayXmin 2800                                  /// Touch Go Menu Relay Cursor X min             if ((p.x > TchRelayXmin && p.x < TchRelayXmax) && (p.y > TchRelayYmin && p.y < TchRelayYmax)) {
+#define TchRelayXmax 3950                                  /// Touch Go Menu Relay Cursor X max 
+#define TchRelayYmin 1825                                  /// TouchGo Menu Relay Cursor Y min 
+#define TchRelayYmax 2595                                  /// Touch Go Menu Relay Cursor Y max
 #define MenuColumn1X 20                                    /// Imagen Text SubMenu  Primera Linea de Texto en la primera columna eje X         
 #define MenuColumn1Y 125                                   /// Imagen Text SubMenu Primera Linea de Texto en la primera columna eje Y         
 #define MenuColumn1NextLine 15                             /// Imagen Text SubMenu     Siguiente Linea de Texto en la primera columna eje Y 
@@ -294,6 +303,33 @@ Version Date Author Comment
 #define decimTo 0.1                                        /// 0.1
 #define decuTo 0.5                                         /// 5
 #define decaTo 10                                          /// 10
+#define msCurrSens 5                                       /// CurrentSensor number of samples to make the average
+#define CurrSensAVG 24                                     /// Current Sensor Average Calcul
+#define RelayMsgAuto "WiFi"                                /// Relay OFF && Available to use remotely if smart connected  (Meross For example)
+#define RelayMsgON  "ON"                                   /// Relay ON
+#define RelayMsgLowbat "BAJA"                              /// Automatically turns on when the battery is low, displays this message
+#define RelayMsgHighW "Watt"                               /// Automatically turns on when the watt is high, displays this message
+#define RelayMsgX 39                                       /// Text Relay State Axis X
+#define RelayMsgY 70                                       /// Text Relay State Axis Y
+#define RelayEraseW 64                                     /// Text Relay State Width erase
+#define RelayEraseH 15                                     /// Text Relay State Height erase
+#define RelayMsgEraseX 1                                   /// Text Relay State Axis X erase
+#define RelayMsgEraseY 13                                  /// Text Relay State Axis Y erase
+#define RelayLedX 15                                       /// Relay LED state Axis X
+#define RelayLedY 14                                       /// Relay LED state Axis Y
+#define LedRelayRad 5                                      /// Relay LED state circumference radius pixel
+#define msRelayON 700                                      /// Relay ms minimum for change state
+#define msRelayOFF 700                                     /// Relay ms minimum for change state
+// If you do not want to use automatic relay functions, you can set the RelayVbatON 0 & RelayWivrtON 9999.
+#define RelayVbatON 25.7                                   //*** Volt   Vbat <          the relay turn ON automatically                             It is advisable to set the value that you do not want to go under
+#define RelayVbatOFF 25.8                                  //*** If RelayLowBat=true && Vbat >= this value         Relay turn OFF automatically     It is recommended that its value should be RelayVbatOn + 0.2 minimum !!
+#define RelayWIvrtON 210                                   //*** Watt   VA inverter >   the relay turn ON automatically                              It is advisable to set the value that you do not want to exceed.
+#define RelayWIvrtOFF 140                                  //*** If RelayHighW=true && VAinverter <= this value    Relay turn OFF automatically     It is recommended that its value should be RelayWivrtOn + 50 minimum !!
+#define RelayLevelON HIGH                                  //*** Relay Pin Output level state ON  (some relays may need a low level to activate, here you can reverse the logic for that)
+#define RelayLevelOFF LOW                                  //*** Relay Pin Output level state OFF (some relays may need a low level to activate, here you can reverse the logic for that)
+// CurrSensRAW It is used to calibrate the current sensor (exemple voltage divider made with two resistors of 2k7 and 4k7 serie, to go from 5v to approximately 3.3v)
+#define CurrSensRAWZero 1015                               //*** Current Sensor RAWvalue 0 Amp (affected by the sensor supply voltage)                                  look for lines "calibra"
+#define CurrSensRAWUnit 0.0206                             //*** Current Sensor RAWvalue 1 Amp   1 / 48.45 = 0.0206 to avoid division step to multiplication factor     look for lines "calibra"
 #define Warm1 "BATERIA BAJA"                               //*** Inverter Warning code 1 Msg nivel demasiado bajo de bateria
 #define Warm2 "BATERIA ALTA"                               //*** Inverter Warning code 2 Msg nivel demasiado alto de bateria
 #define Warm32 "TEMP BAJA"                                 //*** Inverter Warning code 32 Msg Temperatura demasaido baja
@@ -365,15 +401,16 @@ Version Date Author Comment
 #define InverterVacmin 225.4                               //*** Hardware Spec  Inverter Spec 230 -2%
 #define InverterVac 230                                    //*** Hardware Spec  Inverter Spec 230 -2%
 #define InverterVacmax 234.6                               //*** Hardware Spec  Inverter Spec 230 +2%
-#define InverterVbatmin 18.6                               //*** Hardware Spec  Inverter Spec volt battery min
+#define InverterVbatmin 18.6                               //*** Hardware Spec  Inverter Spec volt battery min   Below this value it is understood that there is no battery connected.
 #define InverterVbatmax 34                                 //*** Hardware Spec  Inverter Spec volt battery maxç
 #define InverterIbatmax 70                                 //*** Hardware Spec  Inverter Spec Amp input max = wmax/vbatmax
 #define InverterWmax 2400                                  //*** Hardware Spec  Inverter Spec VA max ( 3000VA +/- 2400W )
 #define InverterEfimax 94                                  //*** Hardware Spec  Inverter Spec Efficiency Maxi 94%          (- =*0.94) (+ =*1.94) 
 #define InverterLossmin 1.06                               //*** Hardware Spec  Inverter Spec minimum Loss 100-94= 6%    (- =*0.06) (+ =*1.06) 
-#define ChargerImax 16                                     //*** Hardware Spec Charger Spec Amp max 16A
+#define ChargerImax 16.5                                   //*** Hardware Spec Charger Spec Amp max (16A max spec model Victron Energy BPC241642002)
+#define ChargerImin 3.5                                    //*** Hardware Spec Charger Spec Amp min ( 4A min spec model Victron Energy BPC241642002)
 
-#define msLoop 150                   //// Loop ms millis
+#define msLoop 125                   //// Loop ms millis  (This may affect the flickering of text on the screen.)
 unsigned long previousMillis = 0;    //// Delay
 unsigned long currentMillis = 0;     //// Delay
 
@@ -395,7 +432,13 @@ String MenuSelected="Home";          /// Menu Solicitado al tocar la pantalla
 String Origin="MPP";                 /// VE.Direct Lectura de datos organizado por Origen   MPPT o Inverter
 String label="V";                    /// VE.Direct Lectura de datos tipo de lectura         V, VPV, PPV, AC V, AC I, ALARM, WARM, ... 
 String val="0";                      /// VE.Direct Lectura de datos valor de lectura        26.4v, error4, ...
+String NewValueStrg="";              /// String      text format
 
+float NewValue=0;                    /// int* 1     numerical format 
+float  NewValuedecim=0;              /// int  0.1   
+float  NewValuecentesi=0;            /// int  0.01  
+float  NewValuemilli=0;              /// int  0.001 
+float  NewValuedeca=0;               /// int  10 
 uint16_t i=0;                        /// Genreal Use Used in counter
 uint8_t MovSpeed= 1;                 /// Imagen Animacion Bola Animada Velociad de movimiento depende tambien del loop -->  pixel por loop
 uint16_t IVTMode;                    /// Inverter Modo integral
@@ -404,6 +447,7 @@ float IVTACI;                        /// Inverter AC Amp
 uint16_t IVTACS;                     /// Inverter AV "aproximadamente Watt AC"
 float IVTAmpIn;                      /// Inverter Amp Input (DC) Estimados aproximado 9% perdida esto no tiene en cuenta carga inductiva o resistiva
 float IVTVbat;                       /// Inverter Bateria Volt
+float BatLevelPresent;               /// Battery Bar Level Home Menu
 float MPTVbat;                       /// MPPT Bateria Volt   float para poder calcular el % correctamente necesita decimales
 float MPTVpv;                        /// MPPT Solar Volt paneles
 uint16_t MPTPpv;                     /// MPPT Watt Solar panel
@@ -428,13 +472,6 @@ uint16_t TchY=0;                     /// Menu eje Y ...
 float CurrSens=0;                    /// Charger Current Sensr AMp Value show display buffer memoria
 float BATAmp = 0;                    /// Battery Current Negative value is amps coming out of the battery. Positive value the battery is charging
 
-float NewValue=0;                    /// int* 1     numerical format 
-float  NewValuedecim=0;              /// int  0.1   
-float  NewValuecentesi=0;            /// int  0.01  
-float  NewValuemilli=0;              /// int  0.001 
-float  NewValuedeca=0;               /// int  10 
-String NewValueStrg="";              /// String      text format
-
 bool AnimSolOut=false;               /// Imagen Animacion interruptor de activacion Solar Output
 bool AnimIVTOutput=false;            /// Imagen Animacion interruptor de activacion Inverter-->Load Output
 bool AnimIVTInput=false;             /// Imagen Animacion interruptor de activacion Inverter Input
@@ -442,6 +479,11 @@ bool AnimChargIVT=false;             /// Imagen Animacion interruptor de activac
 bool AnimChargBat=false;             /// Imagen Animacion interruptor de activacion Charger-->Bateria
 bool AnimBatOut=false;               /// Imagen Animacion interruptor de activacion Bateria Output
 bool AnimBatIn=false;                /// Imagen Animacion interruptor de activacion Bateria Input
+bool RelayStatePresent=false;        /// It will be used to buy the current state and the requested state by pressing the screen.
+bool RelayStateSelect=false;         /// It will be used to buy the current state and the requested state by pressing the screen.
+bool RelayShow=true;                 /// Update the relay status displayed on the screen.
+bool RelayLowBat=false;              /// Indicates if the charger relay was activated due to the battery voltage being very low.  (related to:  RelayVbatON && RelayVbatOFF && RelayMsgLowbat)
+bool RelayHighW=false;               /// Indicates if the charger relay was activated due to the inverter watt is too high.       (related to:  RelayWIvrtON && RelayWIvrtOFF && RelayMsgHighW)
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC,TFT_RST);  /// Display ili9341 pin IMAGEN
 XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);                         /// Display ili9341 pin TOUCH   Param 2 - Touch IRQ Pin - interrupt enabled polling
@@ -456,6 +498,9 @@ void PinSet(){            // initial setup pin esp32
   pinMode(TFT_CS,OUTPUT);                                // Output Display
   pinMode(CurrSensPin, INPUT);                           // Input Currrent Sensor
   analogReadResolution(12);                              // ADC 12 Bits
+
+  pinMode(PinRelay, OUTPUT);                                     // Pin Relay output mode
+  digitalWrite(PinRelay, RelayLevelOFF);                          // Pin Relay turn off 
 }
 void DisplaySet(){        // initial setup display
   tft.begin();        // can be raised to tft.begin(40000000) to avoid flickering   tft.begin(40000000); 
@@ -544,15 +589,19 @@ void ReadSerial2(){       // Data from VE.Direct MPPT
     Origin="MPTnodata";    
   }
 }   
-void CurrentSensor(){     // Data Charger amper calcul from Current Sensor
+void CurrentSensor(){     // Data Charger amper calcul from Current Sensor 
+  NewValue=Zero;
   for( i = Zero; i < CurrSensAVG; i++) {          // read several times to have an average value
     NewValue += analogRead(CurrSensPin);
+    delay(1);
   }
-  NewValue = ( NewValue / CurrSensAVG) ;                          // RAW value for debug en calibration
-  NewValue = (( NewValue - CurrSensRAWZero ) * CurrSensRAWUnit ); // RAW to Amp
+
+  NewValue = ( NewValue / (CurrSensAVG)) ;                          // RAW value for debug en calibration
+  NewValue = (( NewValue - CurrSensRAWZero ) * CurrSensRAWUnit );   // RAW to Amp   deactivate this line with "//"" to see RAW on the screen and calibrate your current sensor calibration
+
   if(  NewValue < One ){
-   NewValue=Zero;                                                // < 1 A  Is not taken into account
-  }else{}
+    NewValue=Zero;                                                // < 1 A  Is not taken into account
+  }
 }
 void SetColumnLine(){     // SubMenu set cursor for print show display data
    // extract X Y axis position from C1L1
@@ -662,11 +711,95 @@ void TouchAsk(){       // Touch Did I touch a button on the screen?
         MenuSelected="Inverter";
     }else if ((TchX> TchLoadXmin && TchX < TchLoadXmax) && (TchY > TchLoadYmin && TchY < TchLoadYmax)) {
         MenuSelected="Load";
+    }else if ((TchX> TchRelayXmin && TchX < TchRelayXmax) && (TchY > TchRelayYmin && TchY < TchRelayYmax)) {   // Relay Charger turn ON OFF
+      RelayStateSelect=!RelayStatePresent;   
+      RelayCheck();
     }
     if(MenuSelected!=MenuPresent){   //  if the present menu is different from the requested menu
       Touched();
     }
   }
+}
+void RelayCheck(){
+  if(RelayStateSelect != RelayStatePresent){
+    if(RelayStateSelect == true){
+      RelayON();
+    }else{
+      RelayOFF();
+    }
+    RelayShow = true;   
+  }
+}
+void RelayON(){
+  digitalWrite(PinRelay, RelayLevelON);                           // Relay turn ON;
+  RelayStatePresent=true;
+  RelayStateSelect=true;
+  RelayShowStat();
+  delay(msRelayON);                                                       // avoid false button press                                           //   Delay set
+}
+void RelayOFF(){
+  digitalWrite(PinRelay, RelayLevelOFF);                          // Relay turn OFF
+  RelayStatePresent=false;
+  RelayStateSelect=false;
+  RelayLowBat=false;
+  RelayHighW=false;
+  RelayShowStat();
+  delay(msRelayOFF);                                                       // avoid false button press   
+}
+void RelayShowStat(){
+  if(RelayShow==true){                                                    // Update status only if there is a status change
+    tft.fillRect(RelayMsgX-RelayMsgEraseX, RelayMsgY-RelayMsgEraseY, RelayEraseW, RelayEraseH , TextColorRed);    // erase old state
+    if(RelayStatePresent==true){                                          // ON
+      if(RelayLowBat==true){                                              
+        tft.fillCircle(RelayLedX, RelayLedY, LedRelayRad,ILI9341_ORANGE);    // LED ORANGE VBat Low turn ON Charger Relay
+        tft.setFont(TxtSize1);                                               // print show display new state Low Bat
+        tft.setTextColor(TextColorOrange);  
+        tft.setCursor(RelayMsgX, RelayMsgY);
+        tft.print(RelayMsgLowbat);
+      } else if ( RelayHighW==true ){
+        tft.fillCircle(RelayLedX, RelayLedY, LedRelayRad,ILI9341_ORANGE);    // LED  ORANGE Watt High turn ON Charger Relay
+        tft.setFont(TxtSize1);                                               // print show display new state High Watt
+        tft.setTextColor(TextColorOrange);  
+        tft.setCursor(RelayMsgX, RelayMsgY);
+        tft.print(RelayMsgHighW);
+      }else{
+        tft.fillCircle(RelayLedX, RelayLedY, LedRelayRad,ILI9341_GREEN);     // LED GREEN
+        tft.setFont(TxtSize1);                                               // print show display new state ON
+        tft.setTextColor(TextColorGreen);  
+        tft.setCursor(RelayMsgX, RelayMsgY);
+        tft.print(RelayMsgON);
+      }
+    } else{                                                           // OFF
+      tft.fillCircle(RelayLedX, RelayLedY, LedRelayRad,TextColorRed);        // LED RED + background RED = LED is OFF
+      tft.setFont(TxtSize1);                                                 // print show display new state WiFi    (used for smart plug controlled from outside for example Meross)
+      tft.setTextColor(TextColorWhite);  
+      tft.setCursor(RelayMsgX, RelayMsgY);
+      tft.print(RelayMsgAuto);
+    }
+   RelayShow=false;
+  }
+}
+void RelayAuto(){
+  if(!RelayStatePresent && MPTVbat>InverterVbatmin && MPTVbat<RelayVbatON ){  // If  InverterVbatmin < Vbat < RelayAutoON = low battery  // if InverterVbatmin > Vbat = no battery, do not activate auto relay
+    RelayStateSelect=true;
+    RelayLowBat=true;
+    RelayCheck();
+  }
+  if(RelayStatePresent && RelayLowBat && MPTVbat>RelayVbatOFF ){              // If the relay was activated due to low battery && has returned to normal values 
+    RelayStateSelect=false;
+    RelayLowBat=false;
+    RelayCheck();
+  }
+  if(!RelayStatePresent && IVTACS>=RelayWIvrtON){                             // If  InverterVbatmin < Vbat < RelayAutoON = low battery  // if InverterVbatmin > Vbat = no battery, do not activate auto relay
+    RelayStateSelect=true;
+    RelayHighW=true;
+    RelayCheck();
+  }
+  if(RelayStatePresent && RelayHighW && IVTACS<=RelayWIvrtOFF){               // If the relay was activated due to high power && has returned to normal values
+    RelayStateSelect=false;
+    RelayHighW=false;
+    RelayCheck();
+  }   
 }
 void NewValueSet(){    // Data New Value Set 
   NewValueStrg = val;                   // RAW value to String
@@ -677,30 +810,44 @@ void NewValueSet(){    // Data New Value Set
   NewValuedeca=(NewValue*decaTo);       // int to * 10
 }
 void HomeBatLevel() {  // Menu Home Battery Level    (from Vbat MPPT)
-  if (MPTVbat < BatLevel1) {
-    tft.fillRect(BatBarLevelx, BatBarLevel0y, BatBarLevel0w, BatBarLevel0h, TextColorBlue);  // Nivel de bateria muy bajo borrar todo slo recuatros verde del nivel
-  }
-  if (MPTVbat > BatLevel1) {
-    tft.fillRoundRect(BatBarLevelx, BatBarLevel1y, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Nivel i+1 encender recuadro verde del nivel i+1
-  }
-  if (MPTVbat > BatLevel2) {
-    tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - BatBarLevelNextY, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Nivel i+1 encender recuadro verde del nivel i+1
-  }
-  if (MPTVbat > BatLevel3) {
-    tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 2), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Nivel i+1 encender recuadro verde del nivel i+1
-  }
-  if (MPTVbat > BatLevel4) {
-    tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 3), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Nivel i+1 encender recuadro verde del nivel i+1
+  if(abs(BatLevelPresent-MPTVbat)>=decimTo){                                                                           // only update if the change is equal to or higher than decimTo = 0.1 variance
+    if (MPTVbat > BatLevel4) {
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 3), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Bar level 4 ON
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 2), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Bar level 3 ON
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - BatBarLevelNextY, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);        // Bar level 2 ON
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);                           // Bar level 1 ON
+    } else if (MPTVbat > BatLevel3) {
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 3), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, TextColorBlue);     // Bar level 4 OFF
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 2), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);  // Bar level 3 ON
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - BatBarLevelNextY, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);        // Bar level 2 ON
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);                           // Bar level 1 ON
+    } else if (MPTVbat > BatLevel2) {
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 3), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, TextColorBlue);     // Bar level 4 OFF
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 2), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, TextColorBlue);     // Bar level 3 OFF
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - BatBarLevelNextY, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);        // Bar level 2 ON
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);                           // Bar level 1 ON
+    } else if (MPTVbat > BatLevel1) {
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 3), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, TextColorBlue);     // Bar level 4 OFF
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - (BatBarLevelNextY * 2), BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, TextColorBlue);     // Bar level 3 OFF
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y - BatBarLevelNextY, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, TextColorBlue);           // Bar level 2 OFF
+      tft.fillRoundRect(BatBarLevelx, BatBarLevel1y, BatBarLevelWidth, BatBarLevelHeight, BatBarLevelRadius, BatBarLevelColor);                           // Bar level 1 ON
+    } else if(MPTVbat < BatLevel1){
+      tft.fillRect(BatBarLevelx, BatBarLevel0y, BatBarLevel0w, BatBarLevel0h, TextColorBlue);                                                             // Bar level OFF very low battery voltage
+    }
+    BatLevelPresent=MPTVbat;
   }
 }
 void HomeCurrentS(){   // Menu Home Charger amper
   CurrentSensor();                      // refresh read current sensor
-  if(abs(CurrSens - NewValue)>=decuTo){     //   0.5 dif 
-    if( NewValue >= Zero && NewValue < ChargerImax ){
-      HomePrintInt(TxtSize2,TextColorRed,TextColorWhite, ChrgAmpX, ChrgAmpY, CurrSens, NewValue, One , "");
-      CurrSens=NewValue;         
-    }
-  }
+  if(abs(CurrSens - NewValue)>=decuTo){     //   decu = 0.5 variance
+    if(NewValue < ChargerImin){
+        NewValue=Zero;
+        HomePrintInt(TxtSize2,TextColorRed,TextColorRed, ChrgAmpX, ChrgAmpY, CurrSens, NewValue, One , "");
+      }else if( NewValue >= ChargerImin && NewValue <= ChargerImax ){  // deactivate this line with // to see RAW on the screen and calibrate your current sensor calibration
+        HomePrintInt(TxtSize2,TextColorRed,TextColorWhite, ChrgAmpX, ChrgAmpY, CurrSens, NewValue, One , "");
+      }
+    CurrSens=NewValue;          
+  }                                                          // deactivate this line with // to see RAW on the screen and calibrate your current sensor calibration
 }
 void HomeIVtAmpIn(){   // Menu Home Inverter amper calcul  (VA is not Watt but close to be able to estimate Amper )
   NewValue=((IVTACS / IVTVbat)*InverterLossmin);  // loss inverter add
@@ -824,6 +971,8 @@ void ValueRst(){       // Data Value Reset
   IVTfwStrg="";
   IVTCSStrgmsg="";
   IVTARStrgmsg="";
+  BatLevelPresent=0;
+  RelayShow=true;
 }
 void DataResetMPT(){   // Data error reset data
   Touched();
@@ -986,6 +1135,7 @@ void Home(){           // Menu Home
   HomeBatAmp();        // Estimated battery amps are negative for outgoing and positive for charging.
   HomeAnimAsk();       // Verify which animations should be activated
   HomeAnimSwitch();    // Activate required animations
+  RelayShowStat();     // Relay State ON OFF AUTO
 }
 void Solar(){          // SubMenu Solar
   ReadSerial2();
@@ -1362,7 +1512,6 @@ void MenuCheck(){      // Touch go to Menu
   }
 }
 
-
 void setup(){
   SerialSet();
   PinSet();
@@ -1371,11 +1520,12 @@ void setup(){
 }
 
 void loop(){  
-  currentMillis = millis();
-  if (currentMillis - previousMillis >= msLoop) {
-    previousMillis = currentMillis;
-     MenuCheck();
-     TouchAsk();
+  currentMillis = millis();                       // Delay start
+  if (currentMillis - previousMillis >= msLoop) { // Delay required for screen and data update = msLoop
+    previousMillis = currentMillis;               // Delay end & reset
+     MenuCheck();                                 // Update present menu data
+     TouchAsk();                                  // heck if any command on the screen was touched
+     RelayAuto();                                 // check if it is necessary to activate the relay in case of low bat or high watt required
   }
 }
 
