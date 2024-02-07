@@ -3,7 +3,7 @@
 First stable version. Still some bug in the show display.
 An ESP32 is used, data is read from the VE.Direct (Victron Energy brand) ports of the Inverter and MPPT. Then display the results on a color screen ili9341.
 The touch screen available will allow you to enter the submenu of each device.
-LDR dimming mode add.
+LDR dimming mode add
 The comments are now mostly in English and some have yet to change.
 
 ========================================================================================================
