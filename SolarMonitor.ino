@@ -1,9 +1,9 @@
-/* Solar Monitor v1.1.0 ManuUniverso 2024
+/* Solar Monitor v1.1.1 ManuUniverso 2024
 
 First stable version. Still some bug in the show display.
 An ESP32 is used, data is read from the VE.Direct (Victron Energy brand) ports of the Inverter and MPPT. Then display the results on a color screen ili9341.
 The touch screen available will allow you to enter the submenu of each device.
-LDR dimming mode add
+LDR dimming mode add.
 The comments are now mostly in English and some have yet to change.
 
 ========================================================================================================
@@ -31,6 +31,7 @@ Version Date Author Comment
 0.1.2 23/01/2024 small bug & Current Sensor HCS LSP 20A for Charger (without ve direct)
 1.0.0 30/01/2024 great changes and improvements, first stable version, add dimming mode LDR
 1.1.0 06/02/2024 Add Relay Functions & bug fix bar battery level & text flicker fix & Current Sensor improvement
+1.1.1 15/02/2024 FIX False positives due to read error reading must be confirmed "RelaySamp=255" times to activate automatic mode
 
    *****************************************************************************
    The reading of the port was achieved thanks to the fantastic contribution of Âld Skânser:
@@ -325,6 +326,7 @@ Version Date Author Comment
 #define RelayVbatOFF 25.8                                  //*** If RelayLowBat=true && Vbat >= this value         Relay turn OFF automatically     It is recommended that its value should be RelayVbatOn + 0.2 minimum !!
 #define RelayWIvrtON 210                                   //*** Watt   VA inverter >   the relay turn ON automatically                              It is advisable to set the value that you do not want to exceed.
 #define RelayWIvrtOFF 140                                  //*** If RelayHighW=true && VAinverter <= this value    Relay turn OFF automatically     It is recommended that its value should be RelayWivrtOn + 50 minimum !!
+#define RelaySamp 255                                      //*** to avoid reading errors, You must read the value several times in a row to take into account for Relay Automatic function (If you want faster changes, you can lower the value)
 #define RelayLevelON HIGH                                  //*** Relay Pin Output level state ON  (some relays may need a low level to activate, here you can reverse the logic for that)
 #define RelayLevelOFF LOW                                  //*** Relay Pin Output level state OFF (some relays may need a low level to activate, here you can reverse the logic for that)
 // CurrSensRAW It is used to calibrate the current sensor (exemple voltage divider made with two resistors of 2k7 and 4k7 serie, to go from 5v to approximately 3.3v)
@@ -471,7 +473,16 @@ uint16_t TchX=0;                     /// Menu eje X Colocacion de background par
 uint16_t TchY=0;                     /// Menu eje Y ...
 float CurrSens=0;                    /// Charger Current Sensr AMp Value show display buffer memoria
 float BATAmp = 0;                    /// Battery Current Negative value is amps coming out of the battery. Positive value the battery is charging
+uint16_t RelayCountVbatON = 0;       /// related to RelaySamp to avoid false
+uint16_t RelayCountVbatOFF = 0;      /// related to RelaySamp to avoid false
+uint16_t RelayCountWivrtON = 0;      /// related to RelaySamp to avoid false
+uint16_t RelayCountWivrtOFF = 0;     /// related to RelaySamp to avoid false
 
+bool RelayStatePresent=false;        /// It will be used to buy the current state and the requested state by pressing the screen.
+bool RelayStateSelect=false;         /// It will be used to buy the current state and the requested state by pressing the screen.
+bool RelayShow=true;                 /// Update the relay status displayed on the screen.
+bool RelayLowBat=false;              /// Indicates if the charger relay was activated due to the battery voltage being very low.  (related to:  RelayVbatON && RelayVbatOFF && RelayMsgLowbat)
+bool RelayHighW=false;               /// Indicates if the charger relay was activated due to the inverter watt is too high.       (related to:  RelayWIvrtON && RelayWIvrtOFF && RelayMsgHighW)
 bool AnimSolOut=false;               /// Imagen Animacion interruptor de activacion Solar Output
 bool AnimIVTOutput=false;            /// Imagen Animacion interruptor de activacion Inverter-->Load Output
 bool AnimIVTInput=false;             /// Imagen Animacion interruptor de activacion Inverter Input
@@ -479,11 +490,6 @@ bool AnimChargIVT=false;             /// Imagen Animacion interruptor de activac
 bool AnimChargBat=false;             /// Imagen Animacion interruptor de activacion Charger-->Bateria
 bool AnimBatOut=false;               /// Imagen Animacion interruptor de activacion Bateria Output
 bool AnimBatIn=false;                /// Imagen Animacion interruptor de activacion Bateria Input
-bool RelayStatePresent=false;        /// It will be used to buy the current state and the requested state by pressing the screen.
-bool RelayStateSelect=false;         /// It will be used to buy the current state and the requested state by pressing the screen.
-bool RelayShow=true;                 /// Update the relay status displayed on the screen.
-bool RelayLowBat=false;              /// Indicates if the charger relay was activated due to the battery voltage being very low.  (related to:  RelayVbatON && RelayVbatOFF && RelayMsgLowbat)
-bool RelayHighW=false;               /// Indicates if the charger relay was activated due to the inverter watt is too high.       (related to:  RelayWIvrtON && RelayWIvrtOFF && RelayMsgHighW)
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC,TFT_RST);  /// Display ili9341 pin IMAGEN
 XPT2046_Touchscreen ts(CS_PIN, TIRQ_PIN);                         /// Display ili9341 pin TOUCH   Param 2 - Touch IRQ Pin - interrupt enabled polling
@@ -780,26 +786,50 @@ void RelayShowStat(){
   }
 }
 void RelayAuto(){
-  if(!RelayStatePresent && MPTVbat>InverterVbatmin && MPTVbat<RelayVbatON ){  // If  InverterVbatmin < Vbat < RelayAutoON = low battery  // if InverterVbatmin > Vbat = no battery, do not activate auto relay
-    RelayStateSelect=true;
-    RelayLowBat=true;
-    RelayCheck();
+  if(!RelayStatePresent && MPTVbat>InverterVbatmin && MPTVbat<RelayVbatON ){  // If VBAT is too low
+    RelayCountVbatON++;                                                       // Counter +1
+    if(RelayCountVbatON >= RelaySamp){                                        // if vbat is too low for Sample times
+      RelayStateSelect=true;                                                  // relay state ON
+      RelayLowBat=true;                                                       // relay flag ON
+      RelayCheck();                                                           // Update the required relay status
+      RelayCountVbatON=RelaySamp;                                             // if vbat > low bat
+    }
+  }else{
+    RelayCountVbatON = Zero;                                                  // counter reset
   }
-  if(RelayStatePresent && RelayLowBat && MPTVbat>RelayVbatOFF ){              // If the relay was activated due to low battery && has returned to normal values 
-    RelayStateSelect=false;
-    RelayLowBat=false;
-    RelayCheck();
+  if(RelayStatePresent && RelayLowBat && MPTVbat>RelayVbatOFF ){              // If VBAT OK
+    RelayCountVbatOFF++;
+    if(RelayCountVbatOFF >= RelaySamp){
+      RelayStateSelect=false;
+      RelayLowBat=false;
+      RelayCheck();
+      RelayCountVbatOFF=RelaySamp;
+    }
+  }else{
+    RelayCountVbatOFF = Zero; 
   }
-  if(!RelayStatePresent && IVTACS>=RelayWIvrtON){                             // If  InverterVbatmin < Vbat < RelayAutoON = low battery  // if InverterVbatmin > Vbat = no battery, do not activate auto relay
-    RelayStateSelect=true;
-    RelayHighW=true;
-    RelayCheck();
+  if(!RelayStatePresent && IVTACS>=RelayWIvrtON){                             // If  VA inverter is too high
+    RelayCountWivrtON++;
+    if(RelayCountWivrtON >= RelaySamp){
+      RelayStateSelect=true;
+      RelayHighW=true;
+      RelayCheck();
+      RelayCountWivrtON=RelaySamp;
+    }
+  }else{
+    RelayCountWivrtON= Zero; 
   }
-  if(RelayStatePresent && RelayHighW && IVTACS<=RelayWIvrtOFF){               // If the relay was activated due to high power && has returned to normal values
-    RelayStateSelect=false;
-    RelayHighW=false;
-    RelayCheck();
-  }   
+  if(RelayStatePresent && RelayHighW && IVTACS<=RelayWIvrtOFF){               // If VA inverter OK
+    RelayCountWivrtOFF++;
+    if(RelayCountWivrtOFF >= RelaySamp){
+      RelayStateSelect=false;
+      RelayHighW=false;
+      RelayCheck();
+      RelayCountWivrtOFF=RelaySamp;
+    }
+  } else{
+    RelayCountWivrtOFF = Zero; 
+  }  
 }
 void NewValueSet(){    // Data New Value Set 
   NewValueStrg = val;                   // RAW value to String
