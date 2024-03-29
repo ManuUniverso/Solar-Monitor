@@ -1,5 +1,5 @@
 /*HomeBackgroundImage size: 320x240 (18.6 kb)Memory on µC: 153600 bytes
-const PROGMEM uint16_t HomeBitmap[HOME_WIDTH * Home_HEIGHT] = {*/
+const PROGMEM uint16_t HomeBitmap[HOME_WIDTH * Home_HEIGHT]= {*/
 #define HOME_WIDTH 320
 #define HOME_HEIGHT 240
 
