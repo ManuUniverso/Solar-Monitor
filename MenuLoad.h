@@ -5,7 +5,7 @@ Memory on µC: 153600 bytes */
 
 #define LoadMenu_WIDTH 320
 #define LoadMenu_HEIGHT 240
-/*Image size: 320x240 (25.97 kb)
+/*Image size: 320x240 (25.97kb)
 File type : image/png
 Memory on µC: 153600 bytes ]*/
 const PROGMEM uint16_t LoadBackGround[LoadMenu_WIDTH * LoadMenu_HEIGHT] = { 
