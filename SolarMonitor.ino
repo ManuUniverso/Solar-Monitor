@@ -32,7 +32,7 @@ Version Date Author Comment
 1.0.0 30/01/2024 great changes and improvements, first stable version, add dimming mode LDR
 1.1.0 06/02/2024 Add Relay Functions & bug fix bar battery level & text flicker fix & Current Sensor improvement
 1.1.1 15/02/2024 FIX False positives due to read error reading must be confirmed "RelaySamp=255" times to activate automatic mode
-1.1.2 28/09/2024 Bug Fix from MenuHome
+1.1.2 28/09/2024 Bug Fix from MenuHome.h
 
    *****************************************************************************
    The reading of the port was achieved thanks to the fantastic contribution of Âld Skânser:
