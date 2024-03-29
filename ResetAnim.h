@@ -1,4 +1,4 @@
-/* Image size: 7x8 (0.69 kb)
+/* Image size: 7x8 (0.69kb)
 File type : image/jpeg
 Memory on µC: 112 bytes */
 #define AnimRstH_WIDTH 7
