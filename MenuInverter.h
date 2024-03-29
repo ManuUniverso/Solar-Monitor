@@ -4,7 +4,7 @@ Memory on µC: 153600 bytes ]
 const PROGMEM uint16_t ChrgBackGround[ChrgMenu_WIDTH * ChrgMenu_HEIGHT] = {*/
 #define InvrtMenu_WIDTH 320
 #define InvrtMenu_HEIGHT 240
-/*Image size: 320x240 (25.97 kb)
+/*Image size: 320x240 (25.97kb)
 File type : image/png
 Memory on µC: 153600 bytes ]*/
 const PROGMEM uint16_t InvrtBackGround[InvrtMenu_WIDTH * InvrtMenu_HEIGHT] = { 
