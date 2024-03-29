@@ -12,3 +12,5 @@ It is important to note that this system is only a solar energy control monitor 
 Connection diagram attached
 
 ![Image](SolarMonitorV110.jpg)
+
+Remember that all downloaded files ***.h & ***.ino they must be in a folder named the same as the "***.ino", in this case you must have all the files downloaded in the same folder "SolarMonitor" to open with Arduino IDE.
