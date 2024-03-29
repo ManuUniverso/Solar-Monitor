@@ -5,7 +5,7 @@ const PROGMEM uint16_t SolarBackGround[SolarMenu_WIDTH * SolarMenu_HEIGHT] = {*/
 
 
 /*SOLARMENU
-Image size: 320x240 (22.67 kb)
+Image size: 320x240 (22.67kb)
 File type : image/png
 Memory on µC: 153600 bytes */ 
 const PROGMEM uint16_t SolarBackGround[SolarMenu_WIDTH * SolarMenu_HEIGHT] = {
